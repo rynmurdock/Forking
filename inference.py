@@ -14,11 +14,17 @@ import torch.nn.functional as F
 from PIL import Image
 from transformers import T5EncoderModel, T5Tokenizer
 
+from transformers import BitsAndBytesConfig
+
+quantization_config = BitsAndBytesConfig(load_in_4bit=True)
+
 from ltx_video.models.autoencoders.causal_video_autoencoder import (
     CausalVideoAutoencoder,
 )
 from ltx_video.models.transformers.symmetric_patchifier import SymmetricPatchifier
-from ltx_video.models.transformers.transformer3d import Transformer3DModel
+# from ltx_video.models.transformers.transformer3d import Transformer3DModel
+from ltx_video.models.transformer_patched import Transformer3DModel
+
 from ltx_video.pipelines.pipeline_ltx_video import LTXVideoPipeline
 from ltx_video.schedulers.rf import RectifiedFlowScheduler
 from ltx_video.utils.conditioning_method import ConditioningMethod
@@ -30,8 +36,8 @@ MAX_NUM_FRAMES = 257
 
 
 def load_vae(vae_dir):
-    vae_ckpt_path = vae_dir / "vae_diffusion_pytorch_model.safetensors"
-    vae_config_path = vae_dir / "config.json"
+    vae_ckpt_path = vae_dir + "vae_diffusion_pytorch_model.safetensors"
+    vae_config_path = vae_dir + "config.json"
     with open(vae_config_path, "r") as f:
         vae_config = json.load(f)
     vae = CausalVideoAutoencoder.from_config(vae_config)
@@ -43,8 +49,8 @@ def load_vae(vae_dir):
 
 
 def load_unet(unet_dir):
-    unet_ckpt_path = unet_dir / "unet_diffusion_pytorch_model.safetensors"
-    unet_config_path = unet_dir / "config.json"
+    unet_ckpt_path = unet_dir + "unet_diffusion_pytorch_model.safetensors"
+    unet_config_path = unet_dir + "config.json"
     transformer_config = Transformer3DModel.load_config(unet_config_path)
     transformer = Transformer3DModel.from_config(transformer_config)
     unet_state_dict = safetensors.torch.load_file(unet_ckpt_path)
@@ -55,7 +61,7 @@ def load_unet(unet_dir):
 
 
 def load_scheduler(scheduler_dir):
-    scheduler_config_path = scheduler_dir / "scheduler_config.json"
+    scheduler_config_path = scheduler_dir + "scheduler_config.json"
     scheduler_config = RectifiedFlowScheduler.load_config(scheduler_config_path)
     return RectifiedFlowScheduler.from_config(scheduler_config)
 
@@ -145,7 +151,7 @@ def get_unique_filename(
 ) -> Path:
     base_filename = f"{base}_{convert_prompt_to_filename(prompt, max_len=30)}_{seed}_{resolution[0]}x{resolution[1]}x{resolution[2]}"
     for i in range(index_range):
-        filename = dir / f"{base_filename}_{i}{endswith if endswith else ''}{ext}"
+        filename = dir + f"{base_filename}_{i}{endswith if endswith else ''}{ext}"
         if not os.path.exists(filename):
             return filename
     raise FileExistsError(
@@ -160,7 +166,7 @@ def seed_everething(seed: int):
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
 
-
+@torch.no_grad()
 def main():
     parser = argparse.ArgumentParser(
         description="Load models from separate directories and run the pipeline."
@@ -202,7 +208,7 @@ def main():
     parser.add_argument(
         "--guidance_scale",
         type=float,
-        default=3,
+        default=4,
         help="Guidance scale for the pipeline",
     )
     parser.add_argument(
@@ -242,7 +248,7 @@ def main():
     parser.add_argument(
         "--negative_prompt",
         type=str,
-        default="worst quality, inconsistent motion, blurry, jittery, distorted",
+        default="low quality. still image.",
         help="Negative prompt for undesired features",
     )
 
@@ -298,9 +304,9 @@ def main():
 
     # Paths for the separate mode directories
     ckpt_dir = Path(args.ckpt_dir)
-    unet_dir = ckpt_dir / "unet"
-    vae_dir = ckpt_dir / "vae"
-    scheduler_dir = ckpt_dir / "scheduler"
+    unet_dir = ckpt_dir + "unet"
+    vae_dir = ckpt_dir + "vae"
+    scheduler_dir = ckpt_dir + "scheduler"
 
     # Load models
     vae = load_vae(vae_dir)
@@ -308,10 +314,10 @@ def main():
     scheduler = load_scheduler(scheduler_dir)
     patchifier = SymmetricPatchifier(patch_size=1)
     text_encoder = T5EncoderModel.from_pretrained(
-        "PixArt-alpha/PixArt-XL-2-1024-MS", subfolder="text_encoder"
+        "PixArt-alpha/PixArt-XL-2-1024-MS", subfolder="text_encoder", quantization_config=quantization_config,
     )
-    if torch.cuda.is_available():
-        text_encoder = text_encoder.to("cuda")
+    # if torch.cuda.is_available():
+    #     text_encoder = text_encoder.to("cuda")
     tokenizer = T5Tokenizer.from_pretrained(
         "PixArt-alpha/PixArt-XL-2-1024-MS", subfolder="tokenizer"
     )
@@ -322,6 +328,7 @@ def main():
     # Use submodels for the pipeline
     submodel_dict = {
         "transformer": unet,
+        # "transformer": torch.compile(unet),
         "patchifier": patchifier,
         "text_encoder": text_encoder,
         "tokenizer": tokenizer,
@@ -331,7 +338,8 @@ def main():
 
     pipeline = LTXVideoPipeline(**submodel_dict)
     if torch.cuda.is_available():
-        pipeline = pipeline.to("cuda")
+        pipeline.transformer = pipeline.transformer.to("cuda")
+        pipeline.vae = pipeline.vae.to("cuda")
 
     # Prepare input for the pipeline
     sample = {
@@ -345,7 +353,6 @@ def main():
     generator = torch.Generator(
         device="cuda" if torch.cuda.is_available() else "cpu"
     ).manual_seed(args.seed)
-
     images = pipeline(
         num_inference_steps=args.num_inference_steps,
         num_images_per_prompt=args.num_images_per_prompt,

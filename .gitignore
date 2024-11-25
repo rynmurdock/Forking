@@ -111,6 +111,15 @@ ipython_config.py
 .pdm-python
 .pdm-build/
 
+*.safetensors
+*.safetensor
+
+*.png
+*.mp4
+
+ltx-weights/
+High_Windows/
+
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
 __pypackages__/
 

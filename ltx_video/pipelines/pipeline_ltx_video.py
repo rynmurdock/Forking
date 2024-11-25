@@ -762,6 +762,8 @@ class LTXVideoPipeline(DiffusionPipeline):
         clean_caption: bool = True,
         media_items: Optional[torch.FloatTensor] = None,
         mixed_precision: bool = False,
+        control_vector=None,
+        alpha=1.5,
         **kwargs,
     ) -> Union[ImagePipelineOutput, Tuple]:
         """
@@ -1021,16 +1023,20 @@ class LTXVideoPipeline(DiffusionPipeline):
                 else:
                     context_manager = nullcontext()  # Dummy context manager
 
+                all_acts = []
                 # predict noise model_output
                 with context_manager:
-                    noise_pred = self.transformer(
+                    noise_pred, activations = self.transformer(
                         latent_model_input.to(self.transformer.dtype),
                         indices_grid,
                         encoder_hidden_states=prompt_embeds.to(self.transformer.dtype),
                         encoder_attention_mask=prompt_attention_mask,
                         timestep=current_timestep,
                         return_dict=False,
-                    )[0]
+                        control_vector=None,
+                        alpha=1.5
+                    ) 
+                    all_acts.append(activations['activation_with_control'])
 
                 # perform guidance
                 if do_classifier_free_guidance:
@@ -1088,11 +1094,8 @@ class LTXVideoPipeline(DiffusionPipeline):
         # Offload all models
         self.maybe_free_model_hooks()
 
-        if not return_dict:
-            return (image,)
-
-        return ImagePipelineOutput(images=image)
-
+        return (image, torch.cat(all_acts, 1)) # just use conditional
+    
     def prepare_conditioning(
         self,
         media_items: torch.Tensor,
