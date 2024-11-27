@@ -65,19 +65,19 @@ from PIL import Image
 import uuid
 import av
 
-def write_video(file_name, images, fps=16):
+def write_video(file_name, images, fps=24):
     container = av.open(file_name, mode="w")
 
     # TODO h264?
-    stream = container.add_stream("mpeg4", rate=fps)
-    # stream.options = {'preset': 'faster'}
-    stream.thread_count = 1
-    stream.width = 416
-    stream.height = 416
+    stream = container.add_stream("h264", rate=fps)
+    stream.options = {'preset': 'faster'}
+    stream.thread_count = 0
+    stream.width = 768
+    stream.height = 512
     stream.pix_fmt = "yuv420p"
 
     for img in images:
-        img = np.array(img)
+        img = np.array(img) * 255
         img = np.round(img).astype(np.uint8)
         frame = av.VideoFrame.from_ndarray(img, format="rgb24")
         for packet in stream.encode(frame):
@@ -88,7 +88,7 @@ def write_video(file_name, images, fps=16):
     # Close the file
     container.close()
 
-def imio_write_video(file_name, images, fps=15):
+def imio_write_video(file_name, images, fps=24):
     writer = imageio.get_writer(file_name, fps=fps)
 
     for im in images:
@@ -101,21 +101,18 @@ def proj(a, b):
 
 # From https://arxiv.org/abs/2411.09003
 @spaces.GPU()
-def solver(embs, ys, alpha=1.5):
+def solver(embs, ys, ):
     pos = [e for e, y in zip(embs, ys) if y == 1]
     neg = [e for e, y in zip(embs, ys) if y == 0]
-    pos_t = torch.stack(pos)[:len(neg)]
-    neg_t = torch.stack(neg)[:len(pos)]
-    r = pos_t.mean(0) - neg_t.mean(0)
-    # v_reference = torch.tensor(random.choice(pos))
-    # v_dir = proj(r, v_reference) + proj(r, neg_t.mean(0)) + alpha * r
-    return r.to('cpu', dtype=torch.float32).unsqueeze(0), neg_t.to('cpu', dtype=torch.float32).unsqueeze(0)
-
+    pos_t = torch.stack(pos)[:len(neg)].mean(0)
+    neg_t = torch.stack(neg)[:len(pos)].mean(0)
+    r = pos_t - neg_t
+    return r.to('cpu', dtype=torch.float32), neg_t.to('cpu', dtype=torch.float32)
 
 @spaces.GPU()
-def generate_gpu(control_vector, prompt='a photo', media_items=None, inference_steps=None, num_frames=150, frame_rate=30):
+def generate_gpu(control_vector, prompt='a photo', media_items=None, inference_steps=20, num_frames=57, alpha=.5, frame_rate=24):
     if media_items is not None:
-        media_items = load_image_to_tensor_with_resize_and_crop(media_items, 416, 416)
+        media_items = load_image_to_tensor_with_resize_and_crop(media_items, 512, 768)
 
     assert control_vector is None or isinstance(control_vector, tuple)
 
@@ -132,14 +129,14 @@ def generate_gpu(control_vector, prompt='a photo', media_items=None, inference_s
     #     device="cuda" if torch.cuda.is_available() else "cpu"
     # ).manual_seed(8)
     images, activations = pipe(
-        num_inference_steps=40 if inference_steps is None else inference_steps,
+        num_inference_steps=inference_steps, # TODO MAKE THIS FAST AGAIN
         num_images_per_prompt=1,
-        guidance_scale=3,
+        guidance_scale=4,
         # generator=generator,
         output_type='pt',
         callback_on_step_end=None,
-        height=416,
-        width=416,
+        height=512,
+        width=768,
         num_frames=num_frames,
         frame_rate=frame_rate,
         **sample,
@@ -151,10 +148,11 @@ def generate_gpu(control_vector, prompt='a photo', media_items=None, inference_s
             else ConditioningMethod.UNCONDITIONAL
         ),
         mixed_precision=True,
-        control_vector=control_vector
+        control_vector=control_vector,
+        alpha=alpha
     )
-                                            # COND vector
-    return images[0].permute(1, 2, 3, 0), activations.mean((0, 1)).squeeze().to('cpu', torch.float32)
+                                            # COND vector timestep, channels
+    return images[0].permute(1, 2, 3, 0), activations.squeeze().to('cpu', torch.float32)
 
 @torch.no_grad()
 def generate(in_im_embs, prompt='the scene'):
@@ -200,7 +198,7 @@ def get_user_emb(embs, ys):
         print('Dropping at 20')
     
     if mini < 1:
-        feature_embs = torch.stack([torch.randn(2048), torch.randn(2048)])
+        feature_embs = torch.stack([torch.randn(8, 2, 1, 2048), torch.randn(8, 2, 1, 2048)])
         ys_t = [0, 1]
         print('Not enough ratings.')
     else:
@@ -214,7 +212,7 @@ def get_user_emb(embs, ys):
         
         # print(np.array(feature_embs).shape, np.array(ys_t).shape)
     
-    sol = solver(feature_embs.squeeze(), ys_t)
+    sol = solver(feature_embs, ys_t)
     # dif = torch.tensor(sol, dtype=dtype).to(device)
     
     # # could j have a base vector of a black image
@@ -236,7 +234,9 @@ def pluck_img(user_id, user_emb):
     for i in not_rated_rows.iterrows():
         # TODO sloppy .to but it is 3am.
         a = i[1]['embeddings']
-        sim = torch.cosine_similarity(a.detach().to('cpu'), user_emb[0].detach().to('cpu'))
+        # USING 0TH timestep activations (we have multiple timesteps ofc) & 0th of sequence
+        print(user_emb[0][0][0][0].shape,'user_emb in pluck_img', a[0][0][0][0].detach().to('cpu'))
+        sim = torch.cosine_similarity(a[0][0][0][0].detach().to('cpu'), user_emb[0][0][0][0].detach().to('cpu'), 0)
         if sim > best_sim:
             best_sim = sim
             best_row = i[1]
@@ -287,10 +287,11 @@ def background_next_image():
                 glob_idx = 0
 
 
-            if glob_idx % 7 == 0:
-                text = prompt_list[glob_idx]
-            else:
-                text = 'a photo'
+            # if glob_idx % 2 == 0:
+            #     text = prompt_list[glob_idx]
+            # else:
+            text = 'artistic video'
+            print(text)
             img, embs = generate(user_emb, text)
             
             if img:
@@ -464,11 +465,10 @@ Explore the latent space without text prompts based on your preferences. Learn m
     './3o.mp4',
     './4o.mp4',
     './5o.mp4',
-    './6o.png',
-    './7o.png',
-    './8o.png',
-    './10o.png',
-    './9o.png',
+    # './6o.mp4',
+    # './7o.mp4',
+    # './8o.mp4',
+    # './9o.mp4',
     ])
     def l():
         return None
@@ -476,7 +476,7 @@ Explore the latent space without text prompts based on your preferences. Learn m
     with gr.Row(elem_id='output-image'):
         img = gr.Video(
         label='Lightning',
-       autoplay=True,
+        autoplay=True,
         interactive=False,
 #        height=512,
 #        width=512,
@@ -484,7 +484,7 @@ Explore the latent space without text prompts based on your preferences. Learn m
         elem_id="video_output",
         # type='filepath',
        )
-        #img.play(l, js='''document.querySelector('[data-testid="Lightning-player"]').loop = true''')
+        img.play(l, js='''document.querySelector('[data-testid="Lightning-player"]').loop = true''')
     
     
     
@@ -540,7 +540,7 @@ Explore the latent space without text prompts based on your preferences. Learn m
 # TODO quiet logging
 
 scheduler = BackgroundScheduler()
-scheduler.add_job(func=background_next_image, trigger="interval", seconds=.2)
+scheduler.add_job(func=background_next_image, trigger="interval", seconds=.01)
 scheduler.start()
 
 def load_pipeline():
@@ -553,7 +553,7 @@ def load_pipeline():
     vae = load_vae(vae_dir)
     unet = load_unet(unet_dir).to(torch.bfloat16)
     text_encoder = T5EncoderModel.from_pretrained(
-        "PixArt-alpha/PixArt-XL-2-1024-MS", subfolder="text_encoder", quantization_config = BitsAndBytesConfig(load_in_8bit=True),
+        "PixArt-alpha/PixArt-XL-2-1024-MS", subfolder="text_encoder",# quantization_config = BitsAndBytesConfig(load_in_8bit=True),
     ).requires_grad_(False)
 
     tokenizer = T5Tokenizer.from_pretrained(
@@ -574,9 +574,11 @@ def load_pipeline():
 
     pipeline = LTXVideoPipeline(**submodel_dict)
     if torch.cuda.is_available():
+        # pipeline.transformer = torch.compile(pipeline.transformer.to("cuda")).requires_grad_(False)
         pipeline.transformer = pipeline.transformer.to("cuda").requires_grad_(False)
         pipeline.vae = pipeline.vae.to("cuda").requires_grad_(False)
-    # TODO compile transformer
+        pipeline.text_encoder = pipeline.text_encoder.to('cuda', torch.bfloat16).requires_grad_(False)
+    # TODO compile model
     return pipeline
 
 pipe = load_pipeline()
@@ -586,31 +588,38 @@ pipe = load_pipeline()
 for im, txt in [ # DO NOT NAME THESE JUST NUMBERS! apparently we assign images by number
     
     # TODO cache these
-    ('./1o.png', 'scene'),
-    ('./2o.png', 'scene '),
-    ('./3o.png', 'scene '),
-    ('./4o.png', 'scene '),
-    ('./5o.png', 'scene '),
-    ('./6o.png', 'scene '),
-    ('./7o.png', 'scene '),
-    ('./8o.png', 'scene '),
-    ('./9o.png', 'scene '),
-    ('./10o.png', 'scene '), # TODO replace with .pt cache of activations & mp4s
+    ('./1o.png', 'artistic vivid scene '),
+    ('./2o.png', 'artistic vivid scene '),
+    ('./3o.png', 'artistic vivid scene '),
+    ('./4o.png', 'artistic vivid scene '),
+    ('./5o.png', 'artistic vivid scene '),
+    # ('./6o.png', 'vivid scene '),
+    # ('./7o.png', 'vivid scene '),
+    # ('./8o.png', 'vivid scene '),
+    # ('./9o.png', 'vivid scene '), # TODO replace with .pt cache of activations & mp4s
     ]:
     tmp_df = pd.DataFrame(columns=['paths', 'embeddings', 'ips', 'user:rating', 'text', 'gemb'])
     tmp_df['paths'] = [im.replace('png', 'mp4')]
     image = Image.open(im).convert('RGB')
 
-    # TODO use image but still gather activations
-    ims, im_emb = generate_gpu(control_vector=None, 
-                               prompt=txt, 
-                               media_items=im, 
-                            #    num_frames=60, 
-                            #    inference_steps=30,
-                            #    frame_rate=15
-                               )
+
+    LOAD_NOT_SAVE = False
+    pt_name = im.replace('png', 'pt')
+    
+    if not LOAD_NOT_SAVE:
+        # # # TODO use image but still gather activations
+        ims, im_emb = generate_gpu(control_vector=None, 
+                                prompt=txt, 
+                                media_items=im, 
+                                )
+        torch.save(ims.to('cpu', torch.float32), im.replace('png', 'image.pt'))
+        torch.save(im_emb.detach().to('cpu'), pt_name)
+    else:
+        ims = torch.load(im.replace('png', 'image.pt'))
+        im_emb = torch.load(f'{pt_name}')
 
     imio_write_video(im.replace('png', 'mp4'), ims.to('cpu', torch.float32))
+    
     
     tmp_df['embeddings'] = [im_emb.detach().to('cpu')]
     tmp_df['user:rating'] = [{' ': ' '}]

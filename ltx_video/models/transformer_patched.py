@@ -17,6 +17,9 @@ from ltx_video.models.transformers.embeddings import get_3d_sincos_pos_embed
 
 logger = logging.get_logger(__name__)
 
+def batch_proj(a, b):
+    out = b * (a * b).sum(-1, keepdim=True) / (b*b).sum(-1, keepdim=True)
+    return out
 
 def proj(a, b):
     result = b * torch.dot(a, b) / torch.dot(b, b)
@@ -321,7 +324,8 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         encoder_attention_mask: Optional[torch.Tensor] = None,
         return_dict: bool = False,
         control_vector = None,
-        alpha = 1.5
+        alpha = 1.5,
+        ind_i=0
     ):
         """
         The [`Transformer2DModel`] forward method.
@@ -465,14 +469,33 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
                     cross_attention_kwargs=cross_attention_kwargs,
                     class_labels=class_labels,
                 )
-            if idx == 14 and timestep < 10:
-                activations = {}
-                activations['just_activations'] = hidden_states
+
+            activations = hidden_states
+            if idx == 0:
+                # TODO verify just regular gen works sans control vectors...
                 if control_vector is not None:
-                    neg_t = control_vector[0]
-                    r = control_vector[1]
-                    hidden_states = hidden_states - proj(r, hidden_states) + proj(r, neg_t.mean(0)) + alpha * r
-                activations['activation_with_control'] = hidden_states
+
+                    # # getting n & r, then index with ind_i (timestep index)
+                    # for seq_ind in range(hidden_states.shape[1]):
+                    #     neg_t = control_vector[1][ind_i].to(hidden_states.device, hidden_states.dtype)
+                    #     r = control_vector[0][ind_i].to(hidden_states.device, hidden_states.dtype)
+
+                    #     hidden_states[0, seq_ind] = (hidden_states[0, seq_ind] - 
+                    #                                  proj(r[0, seq_ind], hidden_states[0, seq_ind]) + 
+                    #                                  proj(r[0, seq_ind], neg_t[0, seq_ind]) + alpha * r[0, seq_ind])
+                    #     hidden_states[1, seq_ind] = (hidden_states[1, seq_ind] - 
+                    #                                  proj(r[1, seq_ind], hidden_states[1, seq_ind]) + 
+                    #                                  proj(r[1, seq_ind], neg_t[1, seq_ind]) + alpha * r[1, seq_ind])
+                    # activations = hidden_states
+
+                    r = control_vector[0][ind_i].to(hidden_states.device, hidden_states.dtype).mean(1, keepdim=True)
+                    neg_t = control_vector[1][ind_i].to(hidden_states.device, hidden_states.dtype).mean(1, keepdim=True)
+
+                    hidden_states = (hidden_states - 
+                                                batch_proj(r, hidden_states) + 
+                                                batch_proj(r, neg_t) + alpha * r)
+                    activations = hidden_states
+
 
         # 3. Output
         scale_shift_values = (

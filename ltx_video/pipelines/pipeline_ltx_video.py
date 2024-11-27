@@ -763,7 +763,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         media_items: Optional[torch.FloatTensor] = None,
         mixed_precision: bool = False,
         control_vector=None,
-        alpha=1.5,
+        alpha=.5,
         **kwargs,
     ) -> Union[ImagePipelineOutput, Tuple]:
         """
@@ -954,6 +954,8 @@ class LTXVideoPipeline(DiffusionPipeline):
             len(timesteps) - num_inference_steps * self.scheduler.order, 0
         )
 
+        activations = ['_']*len(timesteps)
+
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 latent_model_input = (
@@ -1023,20 +1025,20 @@ class LTXVideoPipeline(DiffusionPipeline):
                 else:
                     context_manager = nullcontext()  # Dummy context manager
 
-                all_acts = []
-                # predict noise model_output
+                                # predict noise model_output
                 with context_manager:
-                    noise_pred, activations = self.transformer(
+                    noise_pred, t_acts = self.transformer(
                         latent_model_input.to(self.transformer.dtype),
                         indices_grid,
                         encoder_hidden_states=prompt_embeds.to(self.transformer.dtype),
                         encoder_attention_mask=prompt_attention_mask,
                         timestep=current_timestep,
                         return_dict=False,
-                        control_vector=None,
-                        alpha=1.5
+                        control_vector=control_vector,
+                        alpha=alpha if i == 20 else 0,
+                        ind_i=i,
                     ) 
-                    all_acts.append(activations['activation_with_control'])
+                    activations[i] = t_acts
 
                 # perform guidance
                 if do_classifier_free_guidance:
@@ -1094,7 +1096,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         # Offload all models
         self.maybe_free_model_hooks()
 
-        return (image, torch.cat(all_acts, 1)) # just use conditional
+        return (image, torch.stack(activations, 0)) # shaped: timestep, batch, seq, channels
     
     def prepare_conditioning(
         self,
