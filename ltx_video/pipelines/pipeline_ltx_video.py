@@ -767,6 +767,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         mixed_precision: bool = False,
         control_vector=None,
         alpha=.5,
+        clip_embed=None,
         **kwargs,
     ) -> Union[ImagePipelineOutput, Tuple]:
         """
@@ -1040,6 +1041,7 @@ class LTXVideoPipeline(DiffusionPipeline):
                         control_vector=control_vector,
                         alpha=alpha if i == 20 else 0,
                         ind_i=i,
+                        cross_attention_kwargs={'clip_embed': clip_embed},
                     ) 
                     activations[i] = t_acts
 

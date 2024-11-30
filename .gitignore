@@ -6,7 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# mine
 assets/
+*.pt
 
 # Distribution / packaging
 .Python

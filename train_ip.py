@@ -9,7 +9,7 @@ DTYPE = torch.bfloat16
 from ltx_video.models.autoencoders.causal_video_autoencoder import (
     CausalVideoAutoencoder,
 )
-from ltx_video.models.autoencoders.vae_encode import vae_encode
+from ltx_video.models.autoencoders.vae_encode import vae_encode, get_vae_size_scale_factor
 from ltx_video.models.transformers.symmetric_patchifier import SymmetricPatchifier
 from ltx_video.models.transformers.transformer3d import Transformer3DModel
 from ltx_video.pipelines.pipeline_ltx_video import LTXVideoPipeline
@@ -17,14 +17,9 @@ from ltx_video.schedulers.rf import RectifiedFlowScheduler
 from ltx_video.utils.conditioning_method import ConditioningMethod
 from inference import load_unet, load_vae, load_scheduler, load_image_to_tensor_with_resize_and_crop
 
-import os
 import imageio
 import numpy as np
-import pandas as pd
-
-import random
 import time
-from PIL import Image
 
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -42,7 +37,7 @@ import clip
 
 def get_clip(): # TODO give as input
     model, preprocess = clip.load("ViT-B/16", device=DEVICE)
-    return model# doesn't cast the layernorm smh smh .to(DTYPE)
+    return model.requires_grad_(False)# doesn't cast the layernorm smh smh .to(DTYPE)
 
 def write_video(file_name, images, fps=24):
     container = av.open(file_name, mode="w")
@@ -142,13 +137,13 @@ def generate(in_im_embs, prompt='the scene'):
 
 #######################
 
-def get_grid(patchifier, latents,):
+def get_grid(patchifier, latents, scale_grid):
     return patchifier.get_grid(
                     orig_num_frames=1,
                     orig_height=latents.shape[-2],
                     orig_width=latents.shape[-1],
                     batch_size=latents.shape[0],
-                    scale_grid=None, # TODO this may matter
+                    scale_grid=scale_grid, # TODO this may matter
                     device=latents.device,
                 )
 
@@ -158,44 +153,8 @@ unet_dir = ckpt_dir + "unet/"
 vae_dir = ckpt_dir + "vae/"
 scheduler_dir = ckpt_dir + "scheduler/"
 
-
-def load_pipeline():
-    # Load models
-    vae = load_vae(vae_dir)
-    unet = load_unet(unet_dir)
-    patchifier = SymmetricPatchifier(patch_size=1)
-
-    text_encoder = T5EncoderModel.from_pretrained(
-        "PixArt-alpha/PixArt-XL-2-1024-MS", subfolder="text_encoder",# quantization_config = BitsAndBytesConfig(load_in_8bit=True),
-    ).requires_grad_(False)
-
-    tokenizer = T5Tokenizer.from_pretrained(
-        "PixArt-alpha/PixArt-XL-2-1024-MS", subfolder="tokenizer"
-    )
-    scheduler = load_scheduler(scheduler_dir)
-
-    # Use submodels for the pipeline
-    submodel_dict = {
-        "transformer": unet,
-        "patchifier": patchifier,
-        "text_encoder": text_encoder,
-        "tokenizer": tokenizer,
-        "scheduler": scheduler,
-        "vae": vae,
-    }
-
-    pipeline = LTXVideoPipeline(**submodel_dict)
-    if torch.cuda.is_available():
-        # pipeline.transformer = torch.compile(pipeline.transformer.to("cuda")).requires_grad_(False)
-        pipeline.transformer = pipeline.transformer.to("cuda").requires_grad_(False).to(DTYPE)
-        pipeline.vae = pipeline.vae.to("cuda").requires_grad_(False).to(DTYPE)
-        # pipeline.text_encoder = pipeline.text_encoder.to('cuda', torch.bfloat16).requires_grad_(False)
-
-    # TODO compile model
-    return pipeline
-
 def get_loss(sample, unet, scheduler, clip_embed, idx_grid):
-    sample = sample * scheduler.init_noise_sigma
+    # sample = sample * scheduler.init_noise_sigma
     zeros_like_t5 = torch.zeros(sample.shape[0], 1, 4096, device=sample.device, dtype=sample.dtype)
     zeros_like_att = torch.zeros(sample.shape[0], 1, device=sample.device, dtype=sample.dtype)
     noise = torch.randn_like(sample)
@@ -223,23 +182,38 @@ def main():
     scaler = torch.cuda.amp.GradScaler()
     optimizer = torch.optim.AdamW(params=params, lr=1e-5) # TODO configs
 
+    video_scale_factor, vae_scale_factor, _ = get_vae_size_scale_factor(vae)
+    latent_frame_rate = 24 / video_scale_factor
+    
+
     for epoch in range(1000):
-        for ind, sample in enumerate(dataloader):
-            sample = sample.to(DEVICE)
-
-            print(sample.min(), sample.max(), 'may be 0 to 1?')
-
+        for ind, sample in tqdm(enumerate(dataloader)):
             if sample is None:
                 continue
-
+            sample = sample.to(DEVICE)
             clip_embed = clip_model.encode_image((torch.nn.functional.interpolate(sample, (224, 224)) - .45) / .26)
 
-            sample = vae_encode(sample.unsqueeze(2).to(DTYPE), vae) # my life is like a movie :)
-            idx_grid = get_grid(patchifier, sample)
+            sample = vae_encode(sample.unsqueeze(2).to(DTYPE)*2-1, vae) # my life is like a movie :)
+
+
+            latent_frame_rates = (
+                    torch.ones(
+                        sample.shape[0], 1, device=sample.device
+                    )
+                    * latent_frame_rate
+                )
+            scale_grid = (
+                    (
+                        1 / latent_frame_rates ,
+                        vae_scale_factor,
+                        vae_scale_factor,
+                    )
+                    if unet.use_rope
+                    else None
+                )
+                
+            idx_grid = get_grid(patchifier, sample, scale_grid)
             sample = patchifier.patchify(latents=sample)
-            print(sample.shape)
-            # TODO *2-1? seems no. Could confirm sample.mean(0) ~= 0
-            print(sample.mean(), sample.std(), 'may be ~0 and ~1?')
 
             with torch.cuda.amp.autocast(dtype=DTYPE):
                 loss = get_loss(sample, unet, scheduler, clip_embed, idx_grid)
