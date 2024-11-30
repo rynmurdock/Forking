@@ -54,7 +54,7 @@ def load_unet(unet_dir):
     transformer_config = Transformer3DModel.load_config(unet_config_path)
     transformer = Transformer3DModel.from_config(transformer_config)
     unet_state_dict = safetensors.torch.load_file(unet_ckpt_path)
-    transformer.load_state_dict(unet_state_dict, strict=True)
+    transformer.load_state_dict(unet_state_dict, strict=False)
     if torch.cuda.is_available():
         transformer = transformer.cuda()
     return transformer

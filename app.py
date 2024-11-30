@@ -95,9 +95,6 @@ def imio_write_video(file_name, images, fps=24):
         writer.append_data(np.array(im))
     writer.close()
 
-def proj(a, b):
-    result = b * torch.dot(a, b) / torch.dot(b, b)
-    return result
 
 # From https://arxiv.org/abs/2411.09003
 @spaces.GPU()
@@ -460,15 +457,15 @@ Explore the latent space without text prompts based on your preferences. Learn m
     user_id = gr.State()
     # calibration videos -- this is a misnomer now :D
     calibrate_prompts = gr.State([
-    './1o.mp4',
-    './2o.mp4',
-    './3o.mp4',
-    './4o.mp4',
-    './5o.mp4',
-    # './6o.mp4',
-    # './7o.mp4',
-    # './8o.mp4',
-    # './9o.mp4',
+    './assets/1o.mp4',
+    './assets/2o.mp4',
+    './assets/3o.mp4',
+    './assets/4o.mp4',
+    './assets/5o.mp4',
+    # './assets/6o.mp4',
+    # './assets/7o.mp4',
+    # './assets/8o.mp4',
+    # './assets/9o.mp4',
     ])
     def l():
         return None
@@ -588,15 +585,15 @@ pipe = load_pipeline()
 for im, txt in [ # DO NOT NAME THESE JUST NUMBERS! apparently we assign images by number
     
     # TODO cache these
-    ('./1o.png', 'artistic vivid scene '),
-    ('./2o.png', 'artistic vivid scene '),
-    ('./3o.png', 'artistic vivid scene '),
-    ('./4o.png', 'artistic vivid scene '),
-    ('./5o.png', 'artistic vivid scene '),
-    # ('./6o.png', 'vivid scene '),
-    # ('./7o.png', 'vivid scene '),
-    # ('./8o.png', 'vivid scene '),
-    # ('./9o.png', 'vivid scene '), # TODO replace with .pt cache of activations & mp4s
+    ('./assets/1o.png', 'artistic vivid scene '),
+    ('./assets/2o.png', 'artistic vivid scene '),
+    ('./assets/3o.png', 'artistic vivid scene '),
+    ('./assets/4o.png', 'artistic vivid scene '),
+    ('./assets/5o.png', 'artistic vivid scene '),
+    # ('./assets/6o.png', 'vivid scene '),
+    # ('./assets/7o.png', 'vivid scene '),
+    # ('./assets/8o.png', 'vivid scene '),
+    # ('./assets/9o.png', 'vivid scene '), # TODO replace with .pt cache of activations & mp4s
     ]:
     tmp_df = pd.DataFrame(columns=['paths', 'embeddings', 'ips', 'user:rating', 'text', 'gemb'])
     tmp_df['paths'] = [im.replace('png', 'mp4')]

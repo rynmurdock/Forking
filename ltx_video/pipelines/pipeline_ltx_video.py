@@ -326,12 +326,15 @@ class LTXVideoPipeline(DiffusionPipeline):
                 )
 
             prompt_attention_mask = text_inputs.attention_mask
+#            prompt_attention_mask = torch.tensor([[1]])
             prompt_attention_mask = prompt_attention_mask.to(device)
+#            print(prompt_attention_mask)
 
             prompt_embeds = self.text_encoder(
                 text_input_ids.to(device), attention_mask=prompt_attention_mask
             )
-            prompt_embeds = prompt_embeds[0]
+            prompt_embeds = prompt_embeds[0]#[:, -1:]
+#            print(prompt_embeds.shape)
 
         if self.text_encoder is not None:
             dtype = self.text_encoder.dtype

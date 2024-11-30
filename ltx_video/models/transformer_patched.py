@@ -17,13 +17,10 @@ from ltx_video.models.transformers.embeddings import get_3d_sincos_pos_embed
 
 logger = logging.get_logger(__name__)
 
-def batch_proj(a, b):
+def batch_proj(b, a):
     out = b * (a * b).sum(-1, keepdim=True) / (b*b).sum(-1, keepdim=True)
     return out
 
-def proj(a, b):
-    result = b * torch.dot(a, b) / torch.dot(b, b)
-    return result
 
 @dataclass
 class Transformer3DModelOutput(BaseOutput):
@@ -506,7 +503,7 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         # Modulation
         hidden_states = hidden_states * (1 + scale) + shift
         hidden_states = self.proj_out(hidden_states)
-        return (hidden_states, activations)
+        return hidden_states
 
     def get_absolute_pos_embed(self, grid):
         grid_np = grid[0].cpu().numpy()
