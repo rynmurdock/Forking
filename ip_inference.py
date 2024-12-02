@@ -37,7 +37,7 @@ MAX_NUM_FRAMES = 257
 
 
 def get_clip(): # TODO give as input
-    model, preprocess = clip.load("ViT-B/16", device=DEVICE)
+    model, preprocess = clip.load("ViT-B/16", device='cuda')
     return model.requires_grad_(False)# doesn't cast the layernorm smh smh .to(DTYPE)
 
 
@@ -55,11 +55,17 @@ def load_vae(vae_dir):
 
 
 def load_unet(unet_dir):
-    unet_ckpt_path = unet_dir + "unet_diffusion_pytorch_model.safetensors"
+    unet_ckpt_path = './' + "latest.pt"
+
+    # unet_ckpt_path = unet_dir + '/unet_diffusion_pytorch_model.safetensors'
+
     unet_config_path = unet_dir + "config.json"
     transformer_config = Transformer3DModel.load_config(unet_config_path)
     transformer = Transformer3DModel.from_config(transformer_config)
-    unet_state_dict = safetensors.torch.load_file(unet_ckpt_path)
+    if unet_ckpt_path.endswith('.pt'):
+        unet_state_dict = torch.load(unet_ckpt_path)
+    else:
+        unet_state_dict = safetensors.torch.load_file(unet_ckpt_path)
     transformer.load_state_dict(unet_state_dict, strict=False)
     if torch.cuda.is_available():
         transformer = transformer.cuda()
@@ -73,7 +79,7 @@ def load_scheduler(scheduler_dir):
 
 
 def load_image_to_tensor_with_resize_and_crop(
-    image_path, target_height=512, target_width=768
+    image_path, target_height=512, target_width=512
 ):
     image = Image.open(image_path).convert("RGB")
     input_width, input_height = image.size
@@ -220,13 +226,13 @@ def main():
     parser.add_argument(
         "--height",
         type=int,
-        default=480,
+        default=512,
         help="Height of the output video frames. Optional if an input image provided.",
     )
     parser.add_argument(
         "--width",
         type=int,
-        default=704,
+        default=512,
         help="Width of the output video frames. If None will infer from input image.",
     )
     parser.add_argument(
@@ -248,13 +254,14 @@ def main():
     # Prompts
     parser.add_argument(
         "--prompt",
+        default='''''',
         type=str,
         help="Text prompt to guide generation",
     )
     parser.add_argument(
         "--negative_prompt",
         type=str,
-        default="low quality. still image.",
+        default="",
         help="Negative prompt for undesired features",
     )
 
@@ -267,7 +274,7 @@ def main():
     seed_everething(args.seed)
 
     output_dir = (
-        Path(args.output_path)
+        str(args.output_path)
         if args.output_path
         else Path(f"outputs/{datetime.today().strftime('%Y-%m-%d')}")
     )
@@ -281,10 +288,11 @@ def main():
     else:
         media_items_prepad = None
 
-    clip_model = get_clip()
-
-    clip_media = (media_items + 1) / 2
-    clip_embed = clip_model.encode_image((torch.nn.functional.interpolate(clip_media, (224, 224)) - .45) / .26)
+    clip_embed = None
+    if media_items_prepad is not None:
+        clip_model = get_clip()
+        clip_media = (media_items_prepad + 1) / 2
+        clip_embed = clip_model.encode_image((torch.nn.functional.interpolate(clip_media.squeeze().to('cuda')[None], (224, 224)) - .45) / .26).to(torch.bfloat16)
 
     height = args.height if args.height else media_items_prepad.shape[-2]
     width = args.width if args.width else media_items_prepad.shape[-1]
@@ -314,10 +322,10 @@ def main():
         media_items = None
 
     # Paths for the separate mode directories
-    ckpt_dir = Path(args.ckpt_dir)
-    unet_dir = ckpt_dir + "unet"
-    vae_dir = ckpt_dir + "vae"
-    scheduler_dir = ckpt_dir + "scheduler"
+    ckpt_dir = str(args.ckpt_dir)
+    unet_dir = ckpt_dir + "unet/"
+    vae_dir = ckpt_dir + "vae/"
+    scheduler_dir = ckpt_dir + "scheduler/"
 
     # Load models
     vae = load_vae(vae_dir)
@@ -345,7 +353,6 @@ def main():
         "tokenizer": tokenizer,
         "scheduler": scheduler,
         "vae": vae,
-        "clip_embed": clip_embed
     }
 
     pipeline = LTXVideoPipeline(**submodel_dict)
@@ -359,7 +366,9 @@ def main():
         "prompt_attention_mask": None,
         "negative_prompt": args.negative_prompt,
         "negative_prompt_attention_mask": None,
-        "media_items": media_items,
+        "clip_embed": clip_embed if clip_embed is not None else None,
+        'ip_scale': 1 if clip_embed != None else None,
+        # "media_items": media_items,
     }
 
     generator = torch.Generator(
@@ -385,7 +394,7 @@ def main():
             else ConditioningMethod.UNCONDITIONAL
         ),
         mixed_precision=not args.bfloat16,
-    ).images
+    )[0].unsqueeze(2)
 
     # Crop the padded images to the desired resolution and number of frames
     (pad_left, pad_right, pad_top, pad_bottom) = padding
@@ -412,7 +421,7 @@ def main():
                 prompt=args.prompt,
                 seed=args.seed,
                 resolution=(height, width, num_frames),
-                dir=output_dir,
+                dir=str(output_dir),
             )
             imageio.imwrite(output_filename, video_np[0])
         else:
@@ -420,42 +429,35 @@ def main():
                 base_filename = f"img_to_vid_{i}"
             else:
                 base_filename = f"text_to_vid_{i}"
-            output_filename = get_unique_filename(
-                base_filename,
-                ".mp4",
-                prompt=args.prompt,
-                seed=args.seed,
-                resolution=(height, width, num_frames),
-                dir=output_dir,
-            )
+            output_filename = str(output_dir)+'/i.mp4'
 
             # Write video
             with imageio.get_writer(output_filename, fps=fps) as video:
                 for frame in video_np:
                     video.append_data(frame)
 
-            # Write condition image
-            if args.input_image_path:
-                reference_image = (
-                    (
-                        media_items_prepad[0, :, 0].permute(1, 2, 0).cpu().data.numpy()
-                        + 1.0
-                    )
-                    / 2.0
-                    * 255
-                )
-                imageio.imwrite(
-                    get_unique_filename(
-                        base_filename,
-                        ".png",
-                        prompt=args.prompt,
-                        seed=args.seed,
-                        resolution=(height, width, num_frames),
-                        dir=output_dir,
-                        endswith="_condition",
-                    ),
-                    reference_image.astype(np.uint8),
-                )
+            # # Write condition image
+            # if args.input_image_path:
+            #     reference_image = (
+            #         (
+            #             media_items_prepad[0, :, 0].permute(1, 2, 0).cpu().data.numpy()
+            #             + 1.0
+            #         )
+            #         / 2.0
+            #         * 255
+            #     )
+            #     imageio.imwrite(
+            #         get_unique_filename(
+            #             base_filename,
+            #             ".png",
+            #             prompt=args.prompt,
+            #             seed=args.seed,
+            #             resolution=(height, width, num_frames),
+            #             dir=output_dir,
+            #             endswith="_condition",
+            #         ),
+            #         reference_image.astype(np.uint8),
+                # )
         logger.warning(f"Output saved to {output_dir}")
 
 

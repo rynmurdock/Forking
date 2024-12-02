@@ -48,12 +48,15 @@ def load_vae(vae_dir):
     return vae.to(torch.bfloat16)
 
 
-def load_unet(unet_dir):
-    unet_ckpt_path = unet_dir + "unet_diffusion_pytorch_model.safetensors"
+def load_unet(unet_dir): # TODO don't hardcode -- use arg
+    unet_ckpt_path = unet_dir + '/unet_diffusion_pytorch_model.safetensors'
     unet_config_path = unet_dir + "config.json"
     transformer_config = Transformer3DModel.load_config(unet_config_path)
     transformer = Transformer3DModel.from_config(transformer_config)
-    unet_state_dict = safetensors.torch.load_file(unet_ckpt_path)
+    if unet_ckpt_path.endswith('.pt'):
+        unet_state_dict = torch.load(unet_ckpt_path)
+    else:
+        unet_state_dict = safetensors.torch.load_file(unet_ckpt_path)
     transformer.load_state_dict(unet_state_dict, strict=False)
     if torch.cuda.is_available():
         transformer = transformer.cuda()
@@ -148,15 +151,16 @@ def get_unique_filename(
     dir: Path,
     endswith=None,
     index_range=1000,
-) -> Path:
-    base_filename = f"{base}_{convert_prompt_to_filename(prompt, max_len=30)}_{seed}_{resolution[0]}x{resolution[1]}x{resolution[2]}"
-    for i in range(index_range):
-        filename = dir + f"{base_filename}_{i}{endswith if endswith else ''}{ext}"
-        if not os.path.exists(filename):
-            return filename
-    raise FileExistsError(
-        f"Could not find a unique filename after {index_range} attempts."
-    )
+):
+    # base_filename = f"{base}_{convert_prompt_to_filename(prompt, max_len=30)}_{seed}_{resolution[0]}x{resolution[1]}x{resolution[2]}"
+    # for i in range(index_range):
+    #     filename = dir + f"{str(base_filename)}_{str(i)}{endswith if endswith else ''}{str(ext)}"
+    #     if not os.path.exists(filename):
+    #         return filename
+    # raise FileExistsError(
+    #     f"Could not find a unique filename after {index_range} attempts."
+    # )
+    return 'i.mp4'
 
 
 def seed_everething(seed: int):
@@ -197,7 +201,7 @@ def main():
 
     # Pipeline parameters
     parser.add_argument(
-        "--num_inference_steps", type=int, default=40, help="Number of inference steps"
+        "--num_inference_steps", type=int, default=20, help="Number of inference steps"
     )
     parser.add_argument(
         "--num_images_per_prompt",
@@ -243,6 +247,7 @@ def main():
     parser.add_argument(
         "--prompt",
         type=str,
+        default='''A woman with blonde hair styled up, wearing a black dress with sequins and pearl earrings, looks down with a sad expression on her face. The camera remains stationary, focused on the woman's face. The lighting is dim, casting soft shadows on her face. The scene appears to be from a movie or TV show.''',
         help="Text prompt to guide generation",
     )
     parser.add_argument(
@@ -303,10 +308,10 @@ def main():
         media_items = None
 
     # Paths for the separate mode directories
-    ckpt_dir = Path(args.ckpt_dir)
-    unet_dir = ckpt_dir + "unet"
-    vae_dir = ckpt_dir + "vae"
-    scheduler_dir = ckpt_dir + "scheduler"
+    ckpt_dir = args.ckpt_dir
+    unet_dir = ckpt_dir + "unet/"
+    vae_dir = ckpt_dir + "vae/"
+    scheduler_dir = ckpt_dir + "scheduler/"
 
     # Load models
     vae = load_vae(vae_dir)
@@ -373,7 +378,7 @@ def main():
             else ConditioningMethod.UNCONDITIONAL
         ),
         mixed_precision=not args.bfloat16,
-    ).images
+    )[0]
 
     # Crop the padded images to the desired resolution and number of frames
     (pad_left, pad_right, pad_top, pad_bottom) = padding

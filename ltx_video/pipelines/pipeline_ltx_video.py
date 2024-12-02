@@ -868,43 +868,58 @@ class LTXVideoPipeline(DiffusionPipeline):
         else:
             batch_size = prompt_embeds.shape[0]
 
-        device = self._execution_device
-
+        
         # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
         # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
         # corresponds to doing no classifier free guidance.
         do_classifier_free_guidance = guidance_scale > 1.0
 
-        # 3. Encode input prompt
-        (
-            prompt_embeds,
-            prompt_attention_mask,
-            negative_prompt_embeds,
-            negative_prompt_attention_mask,
-        ) = self.encode_prompt(
-            prompt,
-            do_classifier_free_guidance,
-            negative_prompt=negative_prompt,
-            num_images_per_prompt=num_images_per_prompt,
-            device=device,
-            prompt_embeds=prompt_embeds,
-            negative_prompt_embeds=negative_prompt_embeds,
-            prompt_attention_mask=prompt_attention_mask,
-            negative_prompt_attention_mask=negative_prompt_attention_mask,
-            clean_caption=clean_caption,
-        )
-        if do_classifier_free_guidance:
-            prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-            prompt_attention_mask = torch.cat(
-                [negative_prompt_attention_mask, prompt_attention_mask], dim=0
+        if prompt != '':
+            # 3. Encode input prompt
+            (
+                prompt_embeds,
+                prompt_attention_mask,
+                negative_prompt_embeds,
+                negative_prompt_attention_mask,
+            ) = self.encode_prompt(
+                prompt,
+                do_classifier_free_guidance,
+                negative_prompt=negative_prompt,
+                num_images_per_prompt=num_images_per_prompt,
+                device='cuda',
+                prompt_embeds=prompt_embeds,
+                negative_prompt_embeds=negative_prompt_embeds,
+                prompt_attention_mask=prompt_attention_mask,
+                negative_prompt_attention_mask=negative_prompt_attention_mask,
+                clean_caption=clean_caption,
             )
+            if do_classifier_free_guidance:
+                prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
+                prompt_attention_mask = torch.cat(
+                    [negative_prompt_attention_mask, prompt_attention_mask], dim=0
+                )
+        if prompt == '' and prompt_embeds is not None:
+            prompt_embeds = torch.zeros_like(prompt_embeds)
+            prompt_attention_mask = torch.zeros_like(prompt_attention_mask)
+        elif prompt == '':
+            bs = 2 if guidance_scale > 1 else 1
+            prompt_embeds = torch.zeros(bs, 1, 4096, device='cuda', )
+            prompt_attention_mask = torch.zeros(bs, 1, device='cuda', )
+        
+        device = prompt_embeds.device
+
+        if guidance_scale > 1 and clip_embed is not None: 
+            clip_embed = clip_embed.repeat(2, 1)
+            half = clip_embed.shape[0]//1
+            clip_embed[:half] = torch.zeros_like(clip_embed[:half])
 
         # 3b. Encode and prepare conditioning data
         self.video_scale_factor = self.video_scale_factor if is_video else 1
         conditioning_method = kwargs.get("conditioning_method", None)
         vae_per_channel_normalize = kwargs.get("vae_per_channel_normalize", False)
         init_latents, conditioning_mask = self.prepare_conditioning(
-            media_items,
+            # media_items,
+            None, # We don't use media_items for ip
             num_frames,
             height,
             width,
@@ -1031,19 +1046,19 @@ class LTXVideoPipeline(DiffusionPipeline):
 
                                 # predict noise model_output
                 with context_manager:
-                    noise_pred, t_acts = self.transformer(
+                    noise_pred = self.transformer(
                         latent_model_input.to(self.transformer.dtype),
                         indices_grid,
                         encoder_hidden_states=prompt_embeds.to(self.transformer.dtype),
                         encoder_attention_mask=prompt_attention_mask,
                         timestep=current_timestep,
                         return_dict=False,
-                        control_vector=control_vector,
-                        alpha=alpha if i == 20 else 0,
+                        control_vector=None,
+                        alpha=0,
                         ind_i=i,
-                        cross_attention_kwargs={'clip_embed': clip_embed},
+                        cross_attention_kwargs={'clip_embed': clip_embed, "ip_scale": 1},
                     ) 
-                    activations[i] = t_acts
+                    activations[i] = 0
 
                 # perform guidance
                 if do_classifier_free_guidance:
@@ -1091,9 +1106,10 @@ class LTXVideoPipeline(DiffusionPipeline):
                 latents,
                 self.vae,
                 is_video,
-                vae_per_channel_normalize=kwargs["vae_per_channel_normalize"],
+                vae_per_channel_normalize=kwargs.get("vae_per_channel_normalize", False),
             )
-            image = self.image_processor.postprocess(image, output_type=output_type)
+
+            image = self.image_processor.postprocess(image[:, :, 0], output_type=output_type)
 
         else:
             image = latents
@@ -1101,7 +1117,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         # Offload all models
         self.maybe_free_model_hooks()
 
-        return (image, torch.stack(activations, 0)) # shaped: timestep, batch, seq, channels
+        return image, activations # shaped: timestep, batch, seq, channels
     
     def prepare_conditioning(
         self,

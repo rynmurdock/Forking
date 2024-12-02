@@ -82,6 +82,14 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
 
         self.patchify_proj = nn.Linear(in_channels, inner_dim, bias=True)
 
+        self.tha_ip_clip_proj = torch.nn.Sequential(
+            torch.nn.Linear(512, 512),
+            torch.nn.SiLU(),
+            torch.nn.Linear(512, 512),
+            torch.nn.LayerNorm(512)
+        )
+        self.tha_ip_to_tokens = torch.nn.ModuleList([torch.nn.Linear(512, 512) for i in range(24)])
+
         self.positional_embedding_type = positional_embedding_type
         self.positional_embedding_theta = positional_embedding_theta
         self.positional_embedding_max_pos = positional_embedding_max_pos
@@ -383,8 +391,16 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
                 ) * -10000.0
                 encoder_attention_mask = encoder_attention_mask.unsqueeze(1)
 
+        
+
         # 1. Input
         hidden_states = self.patchify_proj(hidden_states)
+
+        clip_embed = cross_attention_kwargs['clip_embed']
+        clip_embed = self.tha_ip_clip_proj(clip_embed)
+        clip_embed = torch.stack([l(clip_embed) for l in self.tha_ip_to_tokens], 1)
+        cross_attention_kwargs['clip_embed'] = clip_embed
+        print(clip_embed.shape, cross_attention_kwargs['ip_scale'])
 
         if self.timestep_scale_multiplier:
             timestep = self.timestep_scale_multiplier * timestep

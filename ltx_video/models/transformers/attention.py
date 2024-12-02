@@ -1217,8 +1217,10 @@ class AttnIPProc(torch.nn.Module):
 
     def __init__(self):
         super().__init__()
-        self.tha_ip_k = torch.nn.Linear(512, 2048)
-        self.tha_ip_v = torch.nn.Linear(512, 2048)
+        self.tha_ip_k = torch.nn.Linear(256, 2048)
+        self.tha_ip_v = torch.nn.Linear(256, 2048)
+        # self.tha_ip_rmsnorm = RMSNorm(2048, eps=1e-5)
+        self.tha_ip_t = torch.nn.Parameter(torch.tensor([1.]))
 
     def __call__(
         self,
@@ -1299,61 +1301,65 @@ class AttnIPProc(torch.nn.Module):
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
 
-        if attn.use_tpu_flash_attention:  # use tpu attention offload 'flash attention'
-            q_segment_indexes = None
-            if (
-                attention_mask is not None
-            ):  # if mask is required need to tune both segmenIds fields
-                # attention_mask = torch.squeeze(attention_mask).to(torch.float32)
-                attention_mask = attention_mask.to(torch.float32)
-                q_segment_indexes = torch.ones(
-                    batch_size, query.shape[2], device=query.device, dtype=torch.float32
-                )
-                assert (
-                    attention_mask.shape[1] == key.shape[2]
-                ), f"ERROR: KEY SHAPE must be same as attention mask [{key.shape[2]}, {attention_mask.shape[1]}]"
+        # if False:#attn.use_tpu_flash_attention:  # use tpu attention offload 'flash attention'
+        #     q_segment_indexes = None
+        #     if (
+        #         attention_mask is not None
+        #     ):  # if mask is required need to tune both segmenIds fields
+        #         # attention_mask = torch.squeeze(attention_mask).to(torch.float32)
+        #         attention_mask = attention_mask.to(torch.float32)
+        #         q_segment_indexes = torch.ones(
+        #             batch_size, query.shape[2], device=query.device, dtype=torch.float32
+        #         )
+        #         assert (
+        #             attention_mask.shape[1] == key.shape[2]
+        #         ), f"ERROR: KEY SHAPE must be same as attention mask [{key.shape[2]}, {attention_mask.shape[1]}]"
 
-            assert (
-                query.shape[2] % 128 == 0
-            ), f"ERROR: QUERY SHAPE must be divisible by 128 (TPU limitation) [{query.shape[2]}]"
-            assert (
-                key.shape[2] % 128 == 0
-            ), f"ERROR: KEY SHAPE must be divisible by 128 (TPU limitation) [{key.shape[2]}]"
+        #     assert (
+        #         query.shape[2] % 128 == 0
+        #     ), f"ERROR: QUERY SHAPE must be divisible by 128 (TPU limitation) [{query.shape[2]}]"
+        #     assert (
+        #         key.shape[2] % 128 == 0
+        #     ), f"ERROR: KEY SHAPE must be divisible by 128 (TPU limitation) [{key.shape[2]}]"
 
-            # run the TPU kernel implemented in jax with pallas
-            hidden_states = flash_attention(
-                q=query,
-                k=key,
-                v=value,
-                q_segment_ids=q_segment_indexes,
-                kv_segment_ids=attention_mask,
-                sm_scale=attn.scale,
-            )
-        else:
-            hidden_states = F.scaled_dot_product_attention(
-                query,
-                key,
-                value,
-                attn_mask=attention_mask,
-                dropout_p=0.0,
-                is_causal=False,
-            )
+        #     # run the TPU kernel implemented in jax with pallas
+        #     hidden_states = flash_attention(
+        #         q=query,
+        #         k=key,
+        #         v=value,
+        #         q_segment_ids=q_segment_indexes,
+        #         kv_segment_ids=attention_mask,
+        #         sm_scale=attn.scale,
+        #     )
+        # else:
+        hidden_states = F.scaled_dot_product_attention(
+            query,
+            key,
+            value,
+            attn_mask=attention_mask,
+            dropout_p=0.0,
+            is_causal=False,
+        )
 
+        assert clip_embed is not None
         if clip_embed is not None:
             nk = self.tha_ip_k(clip_embed)
-            nv = self.tha_ip_k(clip_embed)
-            
+            # nk = self.tha_ip_rmsnorm(nk)
+
+            nv = self.tha_ip_v(clip_embed)
 
             ip_hidden_states = F.scaled_dot_product_attention(
                 query,
                 nk.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2),
                 nv.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2),
-                attn_mask=attention_mask,
+                # attn_mask=attention_mask,
                 dropout_p=0.0,
                 is_causal=False,
-            )
-            if ip_scale is not None:
-                ip_hidden_states = ip_hidden_states * kwargs['ip_scale']
+            ) * self.tha_ip_t[None, None, None]
+
+            # print(self.tha_ip_t)
+
+            ip_hidden_states = ip_hidden_states * ip_scale
             assert ip_hidden_states.shape == hidden_states.shape, f'{ip_hidden_states.shape} and {hidden_states.shape} ip & hidden shapes'
             hidden_states = hidden_states + ip_hidden_states
 
