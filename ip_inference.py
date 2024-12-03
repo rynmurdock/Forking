@@ -394,7 +394,8 @@ def main():
             else ConditioningMethod.UNCONDITIONAL
         ),
         mixed_precision=not args.bfloat16,
-    )[0].unsqueeze(2)
+    )[0]#.unsqueeze(2)
+    print(images.shape)
 
     # Crop the padded images to the desired resolution and number of frames
     (pad_left, pad_right, pad_top, pad_bottom) = padding

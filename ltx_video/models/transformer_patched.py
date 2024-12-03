@@ -86,6 +86,15 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
 
         self.patchify_proj = nn.Linear(in_channels, inner_dim, bias=True)
 
+        self.tha_ip_clip_proj = torch.nn.Sequential(
+            torch.nn.Linear(512, 512),
+            torch.nn.SiLU(),
+            torch.nn.Linear(512, 512),
+        )
+        self.tha_ip_ln = torch.nn.LayerNorm(512)
+        self.tha_ip_to_tokens = torch.nn.ModuleList([torch.nn.Linear(512, 512) for i in range(24)])
+
+
         self.positional_embedding_type = positional_embedding_type
         self.positional_embedding_theta = positional_embedding_theta
         self.positional_embedding_max_pos = positional_embedding_max_pos
@@ -393,6 +402,12 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         # 1. Input
         hidden_states = self.patchify_proj(hidden_states)
 
+        clip_embed = cross_attention_kwargs['clip_embed']
+        clip_embed = self.tha_ip_clip_proj(clip_embed)
+        
+        clip_embed = torch.stack([self.tha_ip_ln(l(clip_embed)) for l in self.tha_ip_to_tokens], 1)
+        cross_attention_kwargs['clip_embed'] = clip_embed
+
         if self.timestep_scale_multiplier:
             timestep = self.timestep_scale_multiplier * timestep
 
@@ -467,31 +482,31 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
                     class_labels=class_labels,
                 )
 
-            activations = hidden_states
-            if idx == 0:
-                # TODO verify just regular gen works sans control vectors...
-                if control_vector is not None:
+            # activations = hidden_states
+            # if idx == 0:
+            #     # TODO verify just regular gen works sans control vectors...
+            #     if control_vector is not None:
 
-                    # # getting n & r, then index with ind_i (timestep index)
-                    # for seq_ind in range(hidden_states.shape[1]):
-                    #     neg_t = control_vector[1][ind_i].to(hidden_states.device, hidden_states.dtype)
-                    #     r = control_vector[0][ind_i].to(hidden_states.device, hidden_states.dtype)
+            #         # # getting n & r, then index with ind_i (timestep index)
+            #         # for seq_ind in range(hidden_states.shape[1]):
+            #         #     neg_t = control_vector[1][ind_i].to(hidden_states.device, hidden_states.dtype)
+            #         #     r = control_vector[0][ind_i].to(hidden_states.device, hidden_states.dtype)
 
-                    #     hidden_states[0, seq_ind] = (hidden_states[0, seq_ind] - 
-                    #                                  proj(r[0, seq_ind], hidden_states[0, seq_ind]) + 
-                    #                                  proj(r[0, seq_ind], neg_t[0, seq_ind]) + alpha * r[0, seq_ind])
-                    #     hidden_states[1, seq_ind] = (hidden_states[1, seq_ind] - 
-                    #                                  proj(r[1, seq_ind], hidden_states[1, seq_ind]) + 
-                    #                                  proj(r[1, seq_ind], neg_t[1, seq_ind]) + alpha * r[1, seq_ind])
-                    # activations = hidden_states
+            #         #     hidden_states[0, seq_ind] = (hidden_states[0, seq_ind] - 
+            #         #                                  proj(r[0, seq_ind], hidden_states[0, seq_ind]) + 
+            #         #                                  proj(r[0, seq_ind], neg_t[0, seq_ind]) + alpha * r[0, seq_ind])
+            #         #     hidden_states[1, seq_ind] = (hidden_states[1, seq_ind] - 
+            #         #                                  proj(r[1, seq_ind], hidden_states[1, seq_ind]) + 
+            #         #                                  proj(r[1, seq_ind], neg_t[1, seq_ind]) + alpha * r[1, seq_ind])
+            #         # activations = hidden_states
 
-                    r = control_vector[0][ind_i].to(hidden_states.device, hidden_states.dtype).mean(1, keepdim=True)
-                    neg_t = control_vector[1][ind_i].to(hidden_states.device, hidden_states.dtype).mean(1, keepdim=True)
+            #         r = control_vector[0][ind_i].to(hidden_states.device, hidden_states.dtype).mean(1, keepdim=True)
+            #         neg_t = control_vector[1][ind_i].to(hidden_states.device, hidden_states.dtype).mean(1, keepdim=True)
 
-                    hidden_states = (hidden_states - 
-                                                batch_proj(r, hidden_states) + 
-                                                batch_proj(r, neg_t) + alpha * r)
-                    activations = hidden_states
+            #         hidden_states = (hidden_states - 
+            #                                     batch_proj(r, hidden_states) + 
+            #                                     batch_proj(r, neg_t) + alpha * r)
+            #         activations = hidden_states
 
 
         # 3. Output

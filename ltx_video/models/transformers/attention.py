@@ -1217,10 +1217,10 @@ class AttnIPProc(torch.nn.Module):
 
     def __init__(self):
         super().__init__()
-        self.tha_ip_k = torch.nn.Linear(256, 2048)
-        self.tha_ip_v = torch.nn.Linear(256, 2048)
+        self.tha_ip_k = torch.nn.Linear(512, 2048)
+        self.tha_ip_v = torch.nn.Linear(512, 2048)
         # self.tha_ip_rmsnorm = RMSNorm(2048, eps=1e-5)
-        self.tha_ip_t = torch.nn.Parameter(torch.tensor([1.]))
+        # self.tha_ip_t = torch.nn.Parameter(torch.tensor([1.]))
 
     def __call__(
         self,
@@ -1341,28 +1341,7 @@ class AttnIPProc(torch.nn.Module):
             is_causal=False,
         )
 
-        assert clip_embed is not None
-        if clip_embed is not None:
-            nk = self.tha_ip_k(clip_embed)
-            # nk = self.tha_ip_rmsnorm(nk)
-
-            nv = self.tha_ip_v(clip_embed)
-
-            ip_hidden_states = F.scaled_dot_product_attention(
-                query,
-                nk.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2),
-                nv.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2),
-                # attn_mask=attention_mask,
-                dropout_p=0.0,
-                is_causal=False,
-            ) * self.tha_ip_t[None, None, None]
-
-            # print(self.tha_ip_t)
-
-            ip_hidden_states = ip_hidden_states * ip_scale
-            assert ip_hidden_states.shape == hidden_states.shape, f'{ip_hidden_states.shape} and {hidden_states.shape} ip & hidden shapes'
-            hidden_states = hidden_states + ip_hidden_states
-
+        
         hidden_states = hidden_states.transpose(1, 2).reshape(
             batch_size, -1, attn.heads * head_dim
         )
@@ -1380,6 +1359,36 @@ class AttnIPProc(torch.nn.Module):
 
         if attn.residual_connection:
             hidden_states = hidden_states + residual
+
+        
+
+        assert clip_embed is not None
+        if clip_embed is not None:
+            nk = self.tha_ip_k(clip_embed)
+            # nk = self.tha_ip_rmsnorm(nk)
+
+            nv = self.tha_ip_v(clip_embed)
+
+            ip_hidden_states = F.scaled_dot_product_attention(
+                query,
+                nk.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2),
+                nv.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2),
+                # attn_mask=attention_mask,
+                dropout_p=0.0,
+                is_causal=False,
+            )
+
+            ip_hidden_states = ip_hidden_states.transpose(1, 2).reshape(
+                batch_size, -1, attn.heads * head_dim
+            )
+            
+            #* self.tha_ip_t[None, None, None]
+
+            # print(self.tha_ip_t)
+
+            ip_hidden_states = ip_hidden_states * ip_scale
+            assert ip_hidden_states.shape == hidden_states.shape, f'{ip_hidden_states.shape} and {hidden_states.shape} ip & hidden shapes'
+            hidden_states = hidden_states + ip_hidden_states
 
         hidden_states = hidden_states / attn.rescale_output_factor
 

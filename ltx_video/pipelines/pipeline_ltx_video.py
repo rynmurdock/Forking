@@ -874,30 +874,30 @@ class LTXVideoPipeline(DiffusionPipeline):
         # corresponds to doing no classifier free guidance.
         do_classifier_free_guidance = guidance_scale > 1.0
 
-        if prompt != '':
-            # 3. Encode input prompt
-            (
-                prompt_embeds,
-                prompt_attention_mask,
-                negative_prompt_embeds,
-                negative_prompt_attention_mask,
-            ) = self.encode_prompt(
-                prompt,
-                do_classifier_free_guidance,
-                negative_prompt=negative_prompt,
-                num_images_per_prompt=num_images_per_prompt,
-                device='cuda',
-                prompt_embeds=prompt_embeds,
-                negative_prompt_embeds=negative_prompt_embeds,
-                prompt_attention_mask=prompt_attention_mask,
-                negative_prompt_attention_mask=negative_prompt_attention_mask,
-                clean_caption=clean_caption,
-            )
-            if do_classifier_free_guidance:
-                prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-                prompt_attention_mask = torch.cat(
-                    [negative_prompt_attention_mask, prompt_attention_mask], dim=0
-                )
+        # # if prompt != '':
+        # # 3. Encode input prompt
+        # (
+        #     prompt_embeds,
+        #     prompt_attention_mask,
+        #     negative_prompt_embeds,
+        #     negative_prompt_attention_mask,
+        # ) = self.encode_prompt(
+        #     prompt,
+        #     do_classifier_free_guidance,
+        #     negative_prompt=negative_prompt,
+        #     num_images_per_prompt=num_images_per_prompt,
+        #     device='cuda',
+        #     prompt_embeds=prompt_embeds,
+        #     negative_prompt_embeds=negative_prompt_embeds,
+        #     prompt_attention_mask=prompt_attention_mask,
+        #     negative_prompt_attention_mask=negative_prompt_attention_mask,
+        #     clean_caption=clean_caption,
+        # )
+        # if do_classifier_free_guidance:
+        #     prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
+        #     prompt_attention_mask = torch.cat(
+        #         [negative_prompt_attention_mask, prompt_attention_mask], dim=0
+        #     )
         if prompt == '' and prompt_embeds is not None:
             prompt_embeds = torch.zeros_like(prompt_embeds)
             prompt_attention_mask = torch.zeros_like(prompt_attention_mask)
@@ -910,8 +910,9 @@ class LTXVideoPipeline(DiffusionPipeline):
 
         if guidance_scale > 1 and clip_embed is not None: 
             clip_embed = clip_embed.repeat(2, 1)
-            half = clip_embed.shape[0]//1
+            half = clip_embed.shape[0]//2
             clip_embed[:half] = torch.zeros_like(clip_embed[:half])
+            print(clip_embed)
 
         # 3b. Encode and prepare conditioning data
         self.video_scale_factor = self.video_scale_factor if is_video else 1
@@ -1108,8 +1109,10 @@ class LTXVideoPipeline(DiffusionPipeline):
                 is_video,
                 vae_per_channel_normalize=kwargs.get("vae_per_channel_normalize", False),
             )
-
-            image = self.image_processor.postprocess(image[:, :, 0], output_type=output_type)
+            if num_frames == 1:
+                image = self.image_processor.postprocess(image[:, :, 0], output_type=output_type)
+            else:
+                image = self.image_processor.postprocess(image, output_type=output_type)
 
         else:
             image = latents
