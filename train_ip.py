@@ -1,5 +1,6 @@
 
 import torch
+import torchvision
 from tqdm import tqdm
 from ip_data import dataloader
 
@@ -9,7 +10,7 @@ DTYPE = torch.bfloat16
 from ltx_video.models.autoencoders.causal_video_autoencoder import (
     CausalVideoAutoencoder,
 )
-from ltx_video.models.autoencoders.vae_encode import vae_encode, get_vae_size_scale_factor
+from ltx_video.models.autoencoders.vae_encode import vae_encode, get_vae_size_scale_factor, vae_decode
 from ltx_video.models.transformers.symmetric_patchifier import SymmetricPatchifier
 from ltx_video.models.transformer_patched import Transformer3DModel
 from ltx_video.pipelines.pipeline_ltx_video import LTXVideoPipeline
@@ -61,7 +62,7 @@ import av
 import clip
 
 def get_clip(): # TODO give as input
-    model, preprocess = clip.load("ViT-B/16", device=DEVICE)
+    model, preprocess = clip.load("ViT-L/14", device=DEVICE)
     return model.requires_grad_(False)# doesn't cast the layernorm smh smh .to(DTYPE)
 
 def write_video(file_name, images, fps=24):
@@ -99,7 +100,7 @@ def imio_write_video(file_name, images, fps=24):
 
 def get_grid(patchifier, latents, scale_grid):
     return patchifier.get_grid(
-                    orig_num_frames=1,
+                    orig_num_frames=2,
                     orig_height=latents.shape[-2],
                     orig_width=latents.shape[-1],
                     batch_size=latents.shape[0],
@@ -113,14 +114,41 @@ unet_dir = ckpt_dir + "unet/"
 vae_dir = ckpt_dir + "vae/"
 scheduler_dir = ckpt_dir + "scheduler/"
 
+def compute_density_for_timestep_sampling(
+    weighting_scheme: str, batch_size: int, logit_mean: float = None, logit_std: float = None, mode_scale: float = None
+):
+    """
+    Compute the density for sampling the timesteps when doing SD3 training.
+
+    Courtesy: This was contributed by Rafie Walker in https://github.com/huggingface/diffusers/pull/8528.
+
+    SD3 paper reference: https://arxiv.org/abs/2403.03206v1.
+    """
+    if weighting_scheme == "logit_normal":
+        # See 3.1 in the SD3 paper ($rf/lognorm(0.00,1.00)$).
+        u = torch.normal(mean=logit_mean, std=logit_std, size=(batch_size,), device="cpu")
+        u = torch.nn.functional.sigmoid(u)
+    elif weighting_scheme == "mode":
+        u = torch.rand(size=(batch_size,), device="cpu")
+        u = 1 - u - mode_scale * (torch.cos(math.pi * u / 2) ** 2 - 1 + u)
+    else:
+        u = torch.rand(size=(batch_size,), device="cpu")
+    return u
 
 def get_loss(sample, unet, scheduler, clip_embed, idx_grid, prompt_embeds, prompt_att_masks):
     noise = torch.randn_like(sample)
-
     scheduler.set_timesteps(1000, sample, 'cuda')
-    t = scheduler.timesteps[torch.randint(0, len(scheduler.timesteps), (sample.shape[0],))]
+    u = compute_density_for_timestep_sampling('logit_normal', sample.shape[0], 0, .5)
+    t = scheduler.timesteps[((u*torch.rand(sample.shape[0],))*1000).long()]
+    # t = torch.rand((sample.shape[0],), device=sample.device)
+    # TODO seems we need to sample reasonably & probs also shift.
+    # print(sample.shape)
+    t = scheduler.one_shift_timestep(sample, t) # TODO necessary? done in selection, idk.
+
+    t = t*.25 # AH HACK
+
+    print(t)
     assert not torch.isnan(t).any(), 'timestep NaNs'
-    print(t, sample.shape)
     noised_sample = scheduler.add_noise(sample, noise, t)
 
     model_out = unet(noised_sample, idx_grid, timestep=t, 
@@ -137,6 +165,24 @@ def get_loss(sample, unet, scheduler, clip_embed, idx_grid, prompt_embeds, promp
     loss = torch.nn.functional.mse_loss(model_out, true_out)
     return loss
 
+def callbackfn(pipe, i, t, noise_pred, latents):
+    sigma = t
+    pred_original_sample = latents / ((1.0 - sigma)) - sigma*noise_pred / (1.0 - sigma)
+    _, sp, _ = get_vae_size_scale_factor(pipe.vae)
+    latents = pipe.patchifier.unpatchify(
+            latents=pred_original_sample,
+            output_height=512//sp,
+            output_width=512//sp,
+            output_num_frames=2,
+            out_channels=pipe.transformer.in_channels
+            // np.prod(pipe.patchifier.patch_size),
+        )
+    im = vae_decode(latents, pipe.vae, is_video=True, vae_per_channel_normalize=True)
+    print(im.shape)
+    im = im[:, :, 0].to('cpu').float()
+    # torchvision.transforms.ToPILImage()(im)
+    pipe.image_processor.postprocess(im, output_type='pil')[0].save(f'latest/latest_{i}.png')
+
 @torch.no_grad()
 def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, it=0):
     
@@ -144,7 +190,9 @@ def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, i
             'i.png', 512, 512
         )
     clip_media = (media_items_prepad + 1) / 2
-    val_clip_embed = clip_model.encode_image((torch.nn.functional.interpolate(clip_media.squeeze().to('cuda')[None], (224, 224)) - .45) / .26).to(torch.bfloat16)
+    clip_media = (torch.nn.functional.interpolate(clip_media.squeeze().to('cuda')[None], (224, 224)) - .45) / .26
+    # print(clip_media.min(), clip_media.max(), clip_media.shape)
+    val_clip_embed = clip_model.encode_image(clip_media)
 
     # Use submodels for the pipeline
     submodel_dict = {
@@ -162,7 +210,8 @@ def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, i
 
     pipeline = LTXVideoPipeline(**submodel_dict)
     pipeline(prompt='', 
-             num_frames=1, 
+             negative_prompt='',
+             num_frames=9, 
              num_inference_steps=40, 
              clip_embed=val_clip_embed.to(torch.float), 
              ip_scale=1,
@@ -175,31 +224,52 @@ def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, i
              generator=generator,
              )[0][0].save(f'outputs/mary_{it}_.png')
     
-    media_items_prepad = load_image_to_tensor_with_resize_and_crop(
-            'assets/6o.png', 512, 512
-        )
-    clip_media = (media_items_prepad + 1) / 2
-    val_clip_embed = clip_model.encode_image((torch.nn.functional.interpolate(clip_media.squeeze().to('cuda')[None], (224, 224)) - .45) / .26).to(torch.bfloat16)
-
     pipeline(prompt='', 
-             num_frames=1, 
+             negative_prompt='',
+             num_frames=9, 
              num_inference_steps=40, 
              clip_embed=val_clip_embed.to(torch.float), 
              ip_scale=1,
-             guidance_scale=7,
+             guidance_scale=3,
              vae_per_channel_normalize=True,
              height=512,
              width=512,
              is_video=True,
              frame_rate=24,
              generator=generator,
-             )[0][0].save(f'outputs/cir_{it}_.png')
+             )[0][0].save(f'outputs/mary_lower{it}_.png')
+    
+    media_items_prepad = load_image_to_tensor_with_resize_and_crop(
+            'assets/6o.png', 512, 512
+        )
+    # print(media_items_prepad.min(), media_items_prepad.max(), 'should be -1 to 1')
+    clip_media = (media_items_prepad + 1) / 2
+    clip_media = (torch.nn.functional.interpolate(clip_media.squeeze().to('cuda')[None], (224, 224)) - .45) / .26
+    print(clip_media.min(), clip_media.max(), clip_media.shape)
+    val_clip_embed = clip_model.encode_image(clip_media)
+
     pipeline(prompt='', 
-             num_frames=1, 
+             negative_prompt='',
+             num_frames=9, 
              num_inference_steps=40, 
              clip_embed=val_clip_embed.to(torch.float), 
              ip_scale=1,
-             guidance_scale=7,
+             guidance_scale=3,
+             vae_per_channel_normalize=True,
+             height=512,
+             width=512,
+             is_video=True,
+             frame_rate=24,
+             generator=generator,
+             callback_on_step_end=callbackfn,
+             )[0][0].save(f'outputs/cir_{it}_.png')
+    pipeline(prompt='', 
+             negative_prompt='',
+             num_frames=9, 
+             num_inference_steps=40, 
+             clip_embed=val_clip_embed.to(torch.float), 
+             ip_scale=1,
+             guidance_scale=5,
              vae_per_channel_normalize=True,
              height=512,
              width=512,
@@ -258,14 +328,12 @@ def main():
     unet = load_unet(unet_dir).to(DEVICE)
     unet.enable_gradient_checkpointing()
 
-    print(unet.transformer_blocks[0].attn1.processor.tha_ip_k.weight)
-
     scheduler = load_scheduler(scheduler_dir)
     patchifier = SymmetricPatchifier(patch_size=1)
 
     params = [p for n, p in unet.named_parameters() if 'tha_ip' in n]
     # scaler = torch.cuda.amp.GradScaler()
-    optimizer = torch.optim.Adam(params=params, lr=1e-7, weight_decay=0) # TODO configs
+    optimizer = torch.optim.Adam(params=params, lr=1e-3, weight_decay=0) # TODO configs
 
     video_scale_factor, vae_scale_factor, _ = get_vae_size_scale_factor(vae)
     latent_frame_rate = (24) / video_scale_factor
@@ -294,20 +362,27 @@ def main():
             prompt_embeds[drop_or_nah] = empty_embeds[drop_or_nah]
             prompt_att_masks[drop_or_nah] = empty_att_mask[drop_or_nah]
 
-
-            clip_embed = clip_model.encode_image((torch.nn.functional.interpolate(sample, (224, 224)) - .45) / .26)
+            # print(sample.min(), sample.max(), '0 to 1')
+            clip_media = (torch.nn.functional.interpolate(sample, (224, 224)) - .45) / .26
+            clip_embed = clip_model.encode_image(clip_media)
+            # print(clip_media.min(), clip_media.max(), clip_media.shape)
+            clip_embed = clip_embed / clip_embed.norm(dim=1, keepdim=True)
             drop_or_nah = torch.rand((clip_embed.shape[0])) < .2
             clip_embed[drop_or_nah] = torch.zeros_like(clip_embed[drop_or_nah])
 
+
             sample = sample.unsqueeze(2).to(DTYPE) * 2 - 1
+            sample = torch.nn.functional.pad(sample, (0, 0, 0, 0, 0, 8), mode='constant', value=-1)
+            assert sample.shape[2] == 9, f'{sample.shape}'
+
+            # print(sample.min(), sample.max(), '-1 to 1')
 
             # TODO pad with -1?
             sample = vae_encode(sample, 
                                 vae, 
                                 vae_per_channel_normalize=True, 
-                                split_size=8
+                                split_size=sample.shape[0],
                                 ) # my life is like a movie :)
-
 
             latent_frame_rates = (
                     torch.ones(
@@ -335,9 +410,6 @@ def main():
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
-
-            print(unet.transformer_blocks[0].attn1.processor.tha_ip_k.weight)
-            print(unet.tha_ip_clip_proj[0].weight)
 
 
             if (ind) % 400 == 0:

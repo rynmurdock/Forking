@@ -909,6 +909,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         device = prompt_embeds.device
 
         if guidance_scale > 1 and clip_embed is not None: 
+            clip_embed = clip_embed / clip_embed.norm(dim=1, keepdim=True)
             clip_embed = clip_embed.repeat(2, 1)
             half = clip_embed.shape[0]//2
             clip_embed[:half] = torch.zeros_like(clip_embed[:half])
@@ -1092,7 +1093,7 @@ class LTXVideoPipeline(DiffusionPipeline):
                     progress_bar.update()
 
                 if callback_on_step_end is not None:
-                    callback_on_step_end(self, i, t, {})
+                    callback_on_step_end(self, i, t, noise_pred, latents)
 
         latents = self.patchifier.unpatchify(
             latents=latents,
@@ -1109,7 +1110,7 @@ class LTXVideoPipeline(DiffusionPipeline):
                 is_video,
                 vae_per_channel_normalize=kwargs.get("vae_per_channel_normalize", False),
             )
-            if num_frames == 1:
+            if num_frames == 9:
                 image = self.image_processor.postprocess(image[:, :, 0], output_type=output_type)
             else:
                 image = self.image_processor.postprocess(image, output_type=output_type)

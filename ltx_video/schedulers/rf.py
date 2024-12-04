@@ -171,6 +171,10 @@ class RectifiedFlowScheduler(SchedulerMixin, ConfigMixin, TimestepShifter):
                 samples, timesteps, self.base_resolution
             )
         return timesteps
+    
+    def one_shift_timestep(self, samples, timesteps):
+        timesteps = simple_diffusion_resolution_dependent_timestep_shift(samples, timesteps)
+        return timesteps
 
     def set_timesteps(
         self,
@@ -190,7 +194,9 @@ class RectifiedFlowScheduler(SchedulerMixin, ConfigMixin, TimestepShifter):
         timesteps = torch.linspace(1, 1 / num_inference_steps, num_inference_steps).to(
             device
         )
+
         self.timesteps = self.shift_timesteps(samples, timesteps)
+
         self.delta_timesteps = self.timesteps - torch.cat(
             [self.timesteps[1:], torch.zeros_like(self.timesteps[-1:])]
         )

@@ -37,7 +37,7 @@ MAX_NUM_FRAMES = 257
 
 
 def get_clip(): # TODO give as input
-    model, preprocess = clip.load("ViT-B/16", device='cuda')
+    model, preprocess = clip.load("ViT-L/14", device='cuda')
     return model.requires_grad_(False)# doesn't cast the layernorm smh smh .to(DTYPE)
 
 
@@ -396,6 +396,8 @@ def main():
         mixed_precision=not args.bfloat16,
     )[0]#.unsqueeze(2)
     print(images.shape)
+    if len(images.shape) == 4:
+        images = images.unsqueeze(2)
 
     # Crop the padded images to the desired resolution and number of frames
     (pad_left, pad_right, pad_top, pad_bottom) = padding

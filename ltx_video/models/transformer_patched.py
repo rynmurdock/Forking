@@ -87,7 +87,7 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         self.patchify_proj = nn.Linear(in_channels, inner_dim, bias=True)
 
         self.tha_ip_clip_proj = torch.nn.Sequential(
-            torch.nn.Linear(512, 512),
+            torch.nn.Linear(768, 512),
             torch.nn.SiLU(),
             torch.nn.Linear(512, 512),
         )
@@ -330,7 +330,7 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         encoder_attention_mask: Optional[torch.Tensor] = None,
         return_dict: bool = False,
         control_vector = None,
-        alpha = 1.5,
+        alpha = 0,
         ind_i=0
     ):
         """
@@ -402,8 +402,11 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         # 1. Input
         hidden_states = self.patchify_proj(hidden_states)
 
+        # print(hidden_states.shape, indices_grid, indices_grid.shape)
+
         clip_embed = cross_attention_kwargs['clip_embed']
-        clip_embed = self.tha_ip_clip_proj(clip_embed)
+        assert clip_embed.shape[0] == hidden_states.shape[0]
+        clip_embed = self.tha_ip_clip_proj(clip_embed).view(hidden_states.shape[0], 512)
         
         clip_embed = torch.stack([self.tha_ip_ln(l(clip_embed)) for l in self.tha_ip_to_tokens], 1)
         cross_attention_kwargs['clip_embed'] = clip_embed

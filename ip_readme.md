@@ -5,5 +5,7 @@ Just an ip adapter on LTX. We hope it'd generalize to longer videos.
 
 - timestep selection? 
 - cache good and bad pos & neg prompt for all training?
+- chart losses
+- verify encode -> decode
 
 
