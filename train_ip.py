@@ -137,15 +137,15 @@ def compute_density_for_timestep_sampling(
 
 def get_loss(sample, unet, scheduler, clip_embed, idx_grid, prompt_embeds, prompt_att_masks):
     noise = torch.randn_like(sample)
-    scheduler.set_timesteps(1000, sample, 'cuda')
-    u = compute_density_for_timestep_sampling('logit_normal', sample.shape[0], 0, .5)
-    t = scheduler.timesteps[((u*torch.rand(sample.shape[0],))*1000).long()]
+    # scheduler.set_timesteps(1000, sample, 'cuda')
+    u = compute_density_for_timestep_sampling('logit_normal', sample.shape[0], 0, .5).to('cuda')
+    # t = scheduler.timesteps[((u*torch.rand(sample.shape[0],))*1000).long()]
     # t = torch.rand((sample.shape[0],), device=sample.device)
     # TODO seems we need to sample reasonably & probs also shift.
     # print(sample.shape)
-    t = scheduler.one_shift_timestep(sample, t) # TODO necessary? done in selection, idk.
+    t = scheduler.one_shift_timestep(sample, u) # TODO necessary? done in selection, idk.
 
-    t = t*.25 # AH HACK
+    # t = t*.5 # AH HACK
 
     print(t)
     assert not torch.isnan(t).any(), 'timestep NaNs'
