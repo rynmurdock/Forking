@@ -16,13 +16,13 @@ from transformers import T5EncoderModel, T5Tokenizer
 
 from transformers import BitsAndBytesConfig
 
-quantization_config = BitsAndBytesConfig(load_in_4bit=True)
+quantization_config = BitsAndBytesConfig(load_in_8bit=True)
 
 from ltx_video.models.autoencoders.causal_video_autoencoder import (
     CausalVideoAutoencoder,
 )
 from ltx_video.models.transformers.symmetric_patchifier import SymmetricPatchifier
-# from ltx_video.models.transformers.transformer3d import Transformer3DModel
+
 from ltx_video.models.transformer_patched import Transformer3DModel
 
 from ltx_video.pipelines.pipeline_ltx_video import LTXVideoPipeline
@@ -205,7 +205,7 @@ def main():
         default=None,
         help="Path to the folder to save output video, if None will save in outputs/ directory.",
     )
-    parser.add_argument("--seed", type=int, default="171198")
+    parser.add_argument("--seed", type=int, default="7")
 
     # Pipeline parameters
     parser.add_argument(
@@ -242,7 +242,7 @@ def main():
         help="Number of frames to generate in the output video",
     )
     parser.add_argument(
-        "--frame_rate", type=int, default=25, help="Frame rate for the output video"
+        "--frame_rate", type=int, default=24, help="Frame rate for the output video"
     )
 
     parser.add_argument(
@@ -371,9 +371,12 @@ def main():
         # "media_items": media_items,
     }
 
+    print(sample, args)
+
     generator = torch.Generator(
         device="cuda" if torch.cuda.is_available() else "cpu"
     ).manual_seed(args.seed)
+    print(height_padded, num_frames_padded, )
     images = pipeline(
         num_inference_steps=args.num_inference_steps,
         num_images_per_prompt=args.num_images_per_prompt,
@@ -389,9 +392,8 @@ def main():
         is_video=True,
         vae_per_channel_normalize=True,
         conditioning_method=(
-            ConditioningMethod.FIRST_FRAME
-            if media_items is not None
-            else ConditioningMethod.UNCONDITIONAL
+            ConditioningMethod.UNCONDITIONAL # HACK we have hardcoded differences from regular inference because we never use 
+            #                                      trad conditioning
         ),
         mixed_precision=not args.bfloat16,
     )[0]#.unsqueeze(2)

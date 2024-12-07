@@ -508,7 +508,7 @@ class Attention(nn.Module):
         # torch.nn.functional.scaled_dot_product_attention for native Flash/memory_efficient_attention
         # but only if it has the default `scale` argument. TODO remove scale_qk check when we move to torch 2.1
         # if processor is None:
-        #     # processor = AttnProcessor2_0()
+        #     processor = AttnProcessor2_0()
         processor = AttnIPProc()
         self.set_processor(processor)
 
@@ -929,6 +929,8 @@ class AttnProcessor2_0:
         encoder_hidden_states: Optional[torch.FloatTensor] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         temb: Optional[torch.FloatTensor] = None,
+        clip_embed=None,
+        ip_scale=None,
         *args,
         **kwargs,
     ) -> torch.FloatTensor:
@@ -1033,7 +1035,7 @@ class AttnProcessor2_0:
                 query,
                 key,
                 value,
-                attn_mask=attention_mask,
+                attn_mask=None,
                 dropout_p=0.0,
                 is_causal=False,
             )
@@ -1219,8 +1221,9 @@ class AttnIPProc(torch.nn.Module):
         super().__init__()
         self.tha_ip_k = torch.nn.Linear(512, 2048)
         self.tha_ip_v = torch.nn.Linear(512, 2048)
+        
         self.tha_ip_rmsnorm = RMSNorm(2048, eps=1e-5)
-        # self.tha_ip_t = torch.nn.Parameter(torch.tensor([.1]))
+        self.tha_ip_t = torch.nn.Parameter(torch.tensor([.1]))
 
     def __call__(
         self,
@@ -1301,42 +1304,11 @@ class AttnIPProc(torch.nn.Module):
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
 
-        # if False:#attn.use_tpu_flash_attention:  # use tpu attention offload 'flash attention'
-        #     q_segment_indexes = None
-        #     if (
-        #         attention_mask is not None
-        #     ):  # if mask is required need to tune both segmenIds fields
-        #         # attention_mask = torch.squeeze(attention_mask).to(torch.float32)
-        #         attention_mask = attention_mask.to(torch.float32)
-        #         q_segment_indexes = torch.ones(
-        #             batch_size, query.shape[2], device=query.device, dtype=torch.float32
-        #         )
-        #         assert (
-        #             attention_mask.shape[1] == key.shape[2]
-        #         ), f"ERROR: KEY SHAPE must be same as attention mask [{key.shape[2]}, {attention_mask.shape[1]}]"
-
-        #     assert (
-        #         query.shape[2] % 128 == 0
-        #     ), f"ERROR: QUERY SHAPE must be divisible by 128 (TPU limitation) [{query.shape[2]}]"
-        #     assert (
-        #         key.shape[2] % 128 == 0
-        #     ), f"ERROR: KEY SHAPE must be divisible by 128 (TPU limitation) [{key.shape[2]}]"
-
-        #     # run the TPU kernel implemented in jax with pallas
-        #     hidden_states = flash_attention(
-        #         q=query,
-        #         k=key,
-        #         v=value,
-        #         q_segment_ids=q_segment_indexes,
-        #         kv_segment_ids=attention_mask,
-        #         sm_scale=attn.scale,
-        #     )
-        # else:
         hidden_states = F.scaled_dot_product_attention(
             query,
             key,
             value,
-            attn_mask=attention_mask,
+            attn_mask=None,
             dropout_p=0.0,
             is_causal=False,
         )
@@ -1368,7 +1340,7 @@ class AttnIPProc(torch.nn.Module):
             nv = self.tha_ip_v(clip_embed)
 
             ip_hidden_states = F.scaled_dot_product_attention(
-                query,
+                query[:, :512],
                 nk.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2),
                 nv.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2),
                 attn_mask=None,
@@ -1378,12 +1350,12 @@ class AttnIPProc(torch.nn.Module):
 
             ip_hidden_states = ip_hidden_states.transpose(1, 2).reshape(
                 batch_size, -1, attn.heads * head_dim
-            )# * self.tha_ip_t[None, None]
+            ) * self.tha_ip_t[None, None]
 
             # ip_hidden_states = ip_hidden_states / ip_hidden_states.max() * hidden_states.mean()
             ip_hidden_states = ip_hidden_states * ip_scale
-            assert ip_hidden_states.shape == hidden_states.shape, f'{ip_hidden_states.shape} and {hidden_states.shape} ip & hidden shapes'
-            hidden_states = hidden_states + ip_hidden_states
+            # assert ip_hidden_states.shape == hidden_states.shape, f'{ip_hidden_states.shape} and {hidden_states.shape} ip & hidden shapes'
+            hidden_states[:, :512] = hidden_states[:, :512] + ip_hidden_states[:, :512]
 
         hidden_states = hidden_states / attn.rescale_output_factor
 

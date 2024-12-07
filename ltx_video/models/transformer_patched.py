@@ -15,6 +15,9 @@ from torch import nn
 from ltx_video.models.transformers.attention import BasicTransformerBlock
 from ltx_video.models.transformers.embeddings import get_3d_sincos_pos_embed
 
+from diffusers.models.normalization import RMSNorm
+
+
 logger = logging.get_logger(__name__)
 
 def batch_proj(b, a):
@@ -86,13 +89,22 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
 
         self.patchify_proj = nn.Linear(in_channels, inner_dim, bias=True)
 
+        # self.attn2_proj = torch.nn.Sequential(
+        #     torch.nn.Linear(768, 512, bias=False),
+        #     torch.nn.SiLU(),
+        #     torch.nn.Linear(512, 2048, bias=False),
+        #     RMSNorm(2048, eps=1e-6)
+        # )
+        # nn.init.constant_(self.attn2_proj[0].weight, 0)
+        # nn.init.constant_(self.attn2_proj[0].weight, 0)
+
         self.tha_ip_clip_proj = torch.nn.Sequential(
             torch.nn.Linear(768, 512),
             torch.nn.SiLU(),
             torch.nn.Linear(512, 512),
         )
         self.tha_ip_ln = torch.nn.LayerNorm(512)
-        self.tha_ip_to_tokens = torch.nn.ModuleList([torch.nn.Linear(512, 512) for i in range(24)])
+        self.attn2_proj_tha_ip_to_tokens = torch.nn.ModuleList([torch.nn.Linear(512, 512) for i in range(8)])
 
 
         self.positional_embedding_type = positional_embedding_type
@@ -403,13 +415,15 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         hidden_states = self.patchify_proj(hidden_states)
 
         # print(hidden_states.shape, indices_grid, indices_grid.shape)
+        # encoder_hidden_states = self.attn2_proj(encoder_hidden_states).unsqueeze(1)
+        # encoder_hidden_states = torch.zeros_like(hidden_states)[:, :1]
 
-        clip_embed = cross_attention_kwargs['clip_embed']
+        clip_embed = cross_attention_kwargs['clip_embed'][:]
         assert clip_embed.shape[0] == hidden_states.shape[0]
+        # clip_embed = clip_embed / clip_embed.norm(dim=-1, keepdim=True)
         clip_embed = self.tha_ip_clip_proj(clip_embed).view(hidden_states.shape[0], 512)
-        
-        clip_embed = torch.stack([self.tha_ip_ln(l(clip_embed)) for l in self.tha_ip_to_tokens], 1)
-        cross_attention_kwargs['clip_embed'] = clip_embed
+        clip_embed = torch.stack([l(clip_embed) for l in self.attn2_proj_tha_ip_to_tokens], 1)
+        cross_attention_kwargs['clip_embed'] = self.tha_ip_ln(clip_embed)
 
         if self.timestep_scale_multiplier:
             timestep = self.timestep_scale_multiplier * timestep
@@ -438,7 +452,7 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
             batch_size, -1, embedded_timestep.shape[-1]
         )
 
-        # 2. Blocks
+        # # 2. Blocks
         if self.caption_projection is not None:
             batch_size = hidden_states.shape[0]
             encoder_hidden_states = self.caption_projection(encoder_hidden_states)

@@ -24,9 +24,9 @@ import safetensors.torch
 
 def load_unet(unet_dir): # TODO don't hardcode -- use arg
     
-    # unet_ckpt_path = './latest.pt'
+    unet_ckpt_path = './latest.pt'
     
-    unet_ckpt_path = unet_dir + '/unet_diffusion_pytorch_model.safetensors'
+    # unet_ckpt_path = unet_dir + '/unet_diffusion_pytorch_model.safetensors'
 
     unet_config_path = unet_dir + "config.json"
     transformer_config = Transformer3DModel.load_config(unet_config_path)
@@ -130,33 +130,34 @@ def compute_density_for_timestep_sampling(
         u = torch.nn.functional.sigmoid(u)
     elif weighting_scheme == "mode":
         u = torch.rand(size=(batch_size,), device="cpu")
-        u = 1 - u - mode_scale * (torch.cos(math.pi * u / 2) ** 2 - 1 + u)
+        u = 1 - u - mode_scale * (torch.cos(np.pi * u / 2) ** 2 - 1 + u)
     else:
         u = torch.rand(size=(batch_size,), device="cpu")
     return u
 
 def get_loss(sample, unet, scheduler, clip_embed, idx_grid, prompt_embeds, prompt_att_masks):
     noise = torch.randn_like(sample)
-    # scheduler.set_timesteps(1000, sample, 'cuda')
+    scheduler.set_timesteps(1000, sample, 'cuda')
     u = compute_density_for_timestep_sampling('logit_normal', sample.shape[0], 0, .5).to('cuda')
+
     # t = scheduler.timesteps[((u*torch.rand(sample.shape[0],))*1000).long()]
     # t = torch.rand((sample.shape[0],), device=sample.device)
     # TODO seems we need to sample reasonably & probs also shift.
     # print(sample.shape)
-    t = scheduler.one_shift_timestep(sample, u) # TODO necessary? done in selection, idk.
+    # t = scheduler.one_shift_timestep(sample, u)
 
-    # t = t*.5 # AH HACK
+    t = u#scheduler.shift_timesteps(sample, u)
 
     print(t)
     assert not torch.isnan(t).any(), 'timestep NaNs'
     noised_sample = scheduler.add_noise(sample, noise, t)
 
     model_out = unet(noised_sample, idx_grid, timestep=t, 
-                    encoder_hidden_states=prompt_embeds, encoder_attention_mask=prompt_att_masks,
+                    encoder_hidden_states=clip_embed, encoder_attention_mask=None,
                     cross_attention_kwargs={'clip_embed': clip_embed, "ip_scale": 1},
                     return_dict=False)
 
-    true_out = noise - noised_sample
+    true_out = noise - sample
     
     assert not torch.isnan(noised_sample).any(), 'noised_sample NaNs'
     assert not torch.isnan(model_out).any(), 'model_out NaNs'
@@ -187,7 +188,7 @@ def callbackfn(pipe, i, t, noise_pred, latents):
 def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, it=0):
     
     media_items_prepad = load_image_to_tensor_with_resize_and_crop(
-            'i.png', 512, 512
+            'assets/5o.png', 512, 512
         )
     clip_media = (media_items_prepad + 1) / 2
     clip_media = (torch.nn.functional.interpolate(clip_media.squeeze().to('cuda')[None], (224, 224)) - .45) / .26
@@ -206,16 +207,18 @@ def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, i
 
     generator = torch.Generator(
         device="cuda" if torch.cuda.is_available() else "cpu"
-    ).manual_seed(7)
+    )
 
     pipeline = LTXVideoPipeline(**submodel_dict)
+
+    generator.manual_seed(7)
     pipeline(prompt='', 
              negative_prompt='',
              num_frames=9, 
              num_inference_steps=40, 
              clip_embed=val_clip_embed.to(torch.float), 
              ip_scale=1,
-             guidance_scale=1,
+             guidance_scale=3.5,
              vae_per_channel_normalize=True,
              height=512,
              width=512,
@@ -224,19 +227,20 @@ def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, i
              generator=generator,
              )[0][0].save(f'outputs/mary_{it}_.png')
     
+    generator.manual_seed(7)
     pipeline(prompt='', 
              negative_prompt='',
              num_frames=9, 
              num_inference_steps=40, 
              clip_embed=val_clip_embed.to(torch.float), 
              ip_scale=1,
-             guidance_scale=3,
+             guidance_scale=3.5,
              vae_per_channel_normalize=True,
              height=512,
              width=512,
              is_video=True,
              frame_rate=24,
-             generator=generator,
+            #  generator=generator,
              )[0][0].save(f'outputs/mary_lower{it}_.png')
     
     media_items_prepad = load_image_to_tensor_with_resize_and_crop(
@@ -248,13 +252,14 @@ def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, i
     print(clip_media.min(), clip_media.max(), clip_media.shape)
     val_clip_embed = clip_model.encode_image(clip_media)
 
+    generator.manual_seed(7)
     pipeline(prompt='', 
              negative_prompt='',
              num_frames=9, 
              num_inference_steps=40, 
              clip_embed=val_clip_embed.to(torch.float), 
              ip_scale=1,
-             guidance_scale=3,
+             guidance_scale=3.5,
              vae_per_channel_normalize=True,
              height=512,
              width=512,
@@ -269,7 +274,7 @@ def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, i
              num_inference_steps=40, 
              clip_embed=val_clip_embed.to(torch.float), 
              ip_scale=1,
-             guidance_scale=5,
+             guidance_scale=3.5,
              vae_per_channel_normalize=True,
              height=512,
              width=512,
@@ -331,9 +336,9 @@ def main():
     scheduler = load_scheduler(scheduler_dir)
     patchifier = SymmetricPatchifier(patch_size=1)
 
-    params = [p for n, p in unet.named_parameters() if 'tha_ip' in n]
+    params = [p for n, p in unet.named_parameters() if 'tha_ip' in n]# or 'to_q' in n]
     # scaler = torch.cuda.amp.GradScaler()
-    optimizer = torch.optim.Adam(params=params, lr=1e-3, weight_decay=0) # TODO configs
+    optimizer = torch.optim.AdamW(params=params, lr=1e-3, weight_decay=.0001) # TODO configs
 
     video_scale_factor, vae_scale_factor, _ = get_vae_size_scale_factor(vae)
     latent_frame_rate = (24) / video_scale_factor
@@ -358,7 +363,7 @@ def main():
             empty_embeds = empty.repeat(sample.shape[0], 1, 1)
             empty_att_mask = empty_mask.repeat(sample.shape[0], 1, 1)
 
-            drop_or_nah = torch.rand((prompt_embeds.shape[0])) < .2
+            drop_or_nah = torch.rand((prompt_embeds.shape[0])) < .1
             prompt_embeds[drop_or_nah] = empty_embeds[drop_or_nah]
             prompt_att_masks[drop_or_nah] = empty_att_mask[drop_or_nah]
 
@@ -366,13 +371,13 @@ def main():
             clip_media = (torch.nn.functional.interpolate(sample, (224, 224)) - .45) / .26
             clip_embed = clip_model.encode_image(clip_media)
             # print(clip_media.min(), clip_media.max(), clip_media.shape)
-            clip_embed = clip_embed / clip_embed.norm(dim=1, keepdim=True)
-            drop_or_nah = torch.rand((clip_embed.shape[0])) < .2
+            drop_or_nah = torch.rand((clip_embed.shape[0])) < .1
             clip_embed[drop_or_nah] = torch.zeros_like(clip_embed[drop_or_nah])
 
 
             sample = sample.unsqueeze(2).to(DTYPE) * 2 - 1
             sample = torch.nn.functional.pad(sample, (0, 0, 0, 0, 0, 8), mode='constant', value=-1)
+            # sample = sample.repeat(1, 1, 9, 1, 1)
             assert sample.shape[2] == 9, f'{sample.shape}'
 
             # print(sample.min(), sample.max(), '-1 to 1')

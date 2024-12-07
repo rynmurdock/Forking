@@ -746,9 +746,9 @@ class LTXVideoPipeline(DiffusionPipeline):
         width: int,
         num_frames: int,
         frame_rate: float,
-        prompt: Union[str, List[str]] = None,
+        prompt: Union[str, List[str]] = '',
         negative_prompt: str = "",
-        num_inference_steps: int = 20,
+        num_inference_steps: int = 40,
         timesteps: List[int] = None,
         guidance_scale: float = 4.5,
         num_images_per_prompt: Optional[int] = 1,
@@ -874,34 +874,31 @@ class LTXVideoPipeline(DiffusionPipeline):
         # corresponds to doing no classifier free guidance.
         do_classifier_free_guidance = guidance_scale > 1.0
 
-        # # if prompt != '':
-        # # 3. Encode input prompt
-        # (
-        #     prompt_embeds,
-        #     prompt_attention_mask,
-        #     negative_prompt_embeds,
-        #     negative_prompt_attention_mask,
-        # ) = self.encode_prompt(
-        #     prompt,
-        #     do_classifier_free_guidance,
-        #     negative_prompt=negative_prompt,
-        #     num_images_per_prompt=num_images_per_prompt,
-        #     device='cuda',
-        #     prompt_embeds=prompt_embeds,
-        #     negative_prompt_embeds=negative_prompt_embeds,
-        #     prompt_attention_mask=prompt_attention_mask,
-        #     negative_prompt_attention_mask=negative_prompt_attention_mask,
-        #     clean_caption=clean_caption,
-        # )
-        # if do_classifier_free_guidance:
-        #     prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-        #     prompt_attention_mask = torch.cat(
-        #         [negative_prompt_attention_mask, prompt_attention_mask], dim=0
-        #     )
-        if prompt == '' and prompt_embeds is not None:
-            prompt_embeds = torch.zeros_like(prompt_embeds)
-            prompt_attention_mask = torch.zeros_like(prompt_attention_mask)
-        elif prompt == '':
+        if prompt != '' or negative_prompt != '':
+            # 3. Encode input prompt
+            (
+                prompt_embeds,
+                prompt_attention_mask,
+                negative_prompt_embeds,
+                negative_prompt_attention_mask,
+            ) = self.encode_prompt(
+                prompt,
+                do_classifier_free_guidance,
+                negative_prompt=negative_prompt,
+                num_images_per_prompt=num_images_per_prompt,
+                device='cuda',
+                prompt_embeds=prompt_embeds,
+                negative_prompt_embeds=negative_prompt_embeds,
+                prompt_attention_mask=prompt_attention_mask,
+                negative_prompt_attention_mask=negative_prompt_attention_mask,
+                clean_caption=clean_caption,
+            )
+            if do_classifier_free_guidance:
+                prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
+                prompt_attention_mask = torch.cat(
+                    [negative_prompt_attention_mask, prompt_attention_mask], dim=0
+                 )
+        if prompt == '': # TODO accomodate batch size > 1
             bs = 2 if guidance_scale > 1 else 1
             prompt_embeds = torch.zeros(bs, 1, 4096, device='cuda', )
             prompt_attention_mask = torch.zeros(bs, 1, device='cuda', )
@@ -909,7 +906,6 @@ class LTXVideoPipeline(DiffusionPipeline):
         device = prompt_embeds.device
 
         if guidance_scale > 1 and clip_embed is not None: 
-            clip_embed = clip_embed / clip_embed.norm(dim=1, keepdim=True)
             clip_embed = clip_embed.repeat(2, 1)
             half = clip_embed.shape[0]//2
             clip_embed[:half] = torch.zeros_like(clip_embed[:half])
@@ -1051,7 +1047,7 @@ class LTXVideoPipeline(DiffusionPipeline):
                     noise_pred = self.transformer(
                         latent_model_input.to(self.transformer.dtype),
                         indices_grid,
-                        encoder_hidden_states=prompt_embeds.to(self.transformer.dtype),
+                        encoder_hidden_states=prompt_embeds,#clip_embed.to(self.transformer.dtype),
                         encoder_attention_mask=prompt_attention_mask,
                         timestep=current_timestep,
                         return_dict=False,
