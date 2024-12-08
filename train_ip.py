@@ -35,7 +35,7 @@ def load_unet(unet_dir): # TODO don't hardcode -- use arg
         unet_state_dict = torch.load(unet_ckpt_path)
     else:
         unet_state_dict = safetensors.torch.load_file(unet_ckpt_path)
-    transformer.load_state_dict(unet_state_dict, strict=False)
+    transformer.load_state_dict(unet_state_dict, strict=True)
     if torch.cuda.is_available():
         transformer = transformer.cuda()
     transformer.training = True
@@ -338,7 +338,7 @@ def main():
 
     params = [p for n, p in unet.named_parameters() if 'tha_ip' in n]# or 'to_q' in n]
     # scaler = torch.cuda.amp.GradScaler()
-    optimizer = torch.optim.AdamW(params=params, lr=1e-3, weight_decay=.0001) # TODO configs
+    optimizer = torch.optim.AdamW(params=params, lr=1e-4, weight_decay=.0001) # TODO configs
 
     video_scale_factor, vae_scale_factor, _ = get_vae_size_scale_factor(vae)
     latent_frame_rate = (24) / video_scale_factor

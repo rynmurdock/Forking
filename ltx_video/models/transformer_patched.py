@@ -416,7 +416,7 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
 
         # print(hidden_states.shape, indices_grid, indices_grid.shape)
         # encoder_hidden_states = self.attn2_proj(encoder_hidden_states).unsqueeze(1)
-        # encoder_hidden_states = torch.zeros_like(hidden_states)[:, :1]
+        encoder_hidden_states = torch.zeros_like(hidden_states)[:, :1].repeat(1, 1, 2) # it's double the dimensionality
 
         clip_embed = cross_attention_kwargs['clip_embed'][:]
         assert clip_embed.shape[0] == hidden_states.shape[0]
@@ -452,13 +452,13 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
             batch_size, -1, embedded_timestep.shape[-1]
         )
 
-        # # # 2. Blocks # HACK add back!
-        # if self.caption_projection is not None:
-        #     batch_size = hidden_states.shape[0]
-        #     encoder_hidden_states = self.caption_projection(encoder_hidden_states)
-        #     encoder_hidden_states = encoder_hidden_states.view(
-        #         batch_size, -1, hidden_states.shape[-1]
-        #     )
+        # # # 2. Blocks
+        if self.caption_projection is not None:
+            batch_size = hidden_states.shape[0]
+            encoder_hidden_states = self.caption_projection(encoder_hidden_states)
+            encoder_hidden_states = encoder_hidden_states.view(
+                batch_size, -1, hidden_states.shape[-1]
+            )
 
         for idx, block in enumerate(self.transformer_blocks):
             if self.training and self.gradient_checkpointing:

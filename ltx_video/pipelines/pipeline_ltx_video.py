@@ -902,7 +902,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         # if prompt == '': # TODO accomodate batch size > 1
         #     prompt_embeds = torch.zeros(clip_embed.shape[0]*2, 1, 4096, device='cuda', )
         
-        device = prompt_embeds.device
+        device = torch.device('cuda')#prompt_embeds.device
 
         if guidance_scale > 1 and clip_embed is not None: 
             clip_embed = clip_embed.repeat(2, 1)
@@ -936,7 +936,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             batch_size=batch_size * num_images_per_prompt,
             num_latent_channels=self.transformer.config.in_channels,
             num_patches=num_latent_patches,
-            dtype=prompt_embeds.dtype,
+            dtype=torch.float,#prompt_embeds.dtype,
             device=device,
             generator=generator,
             latents=init_latents,
