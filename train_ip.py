@@ -163,7 +163,7 @@ def get_loss(sample, unet, scheduler, clip_embed, idx_grid, prompt_embeds, promp
     assert not torch.isnan(model_out).any(), 'model_out NaNs'
     assert not torch.isnan(true_out).any(), 'true_out NaNs'
 
-    loss = torch.nn.functional.mse_loss(model_out, true_out)
+    loss = torch.nn.functional.mse_loss(model_out[:, :128], true_out[:, :128])
     return loss
 
 def callbackfn(pipe, i, t, noise_pred, latents):

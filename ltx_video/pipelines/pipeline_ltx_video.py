@@ -874,34 +874,33 @@ class LTXVideoPipeline(DiffusionPipeline):
         # corresponds to doing no classifier free guidance.
         do_classifier_free_guidance = guidance_scale > 1.0
 
-        if prompt != '' or negative_prompt != '':
-            # 3. Encode input prompt
-            (
-                prompt_embeds,
-                prompt_attention_mask,
-                negative_prompt_embeds,
-                negative_prompt_attention_mask,
-            ) = self.encode_prompt(
-                prompt,
-                do_classifier_free_guidance,
-                negative_prompt=negative_prompt,
-                num_images_per_prompt=num_images_per_prompt,
-                device='cuda',
-                prompt_embeds=prompt_embeds,
-                negative_prompt_embeds=negative_prompt_embeds,
-                prompt_attention_mask=prompt_attention_mask,
-                negative_prompt_attention_mask=negative_prompt_attention_mask,
-                clean_caption=clean_caption,
-            )
-            if do_classifier_free_guidance:
-                prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-                prompt_attention_mask = torch.cat(
-                    [negative_prompt_attention_mask, prompt_attention_mask], dim=0
-                 )
-        if prompt == '': # TODO accomodate batch size > 1
-            bs = 2 if guidance_scale > 1 else 1
-            prompt_embeds = torch.zeros(bs, 1, 4096, device='cuda', )
-            prompt_attention_mask = torch.zeros(bs, 1, device='cuda', )
+        # if prompt != '' or negative_prompt != '':
+        #     # 3. Encode input prompt
+        #     (
+        #         prompt_embeds,
+        #         prompt_attention_mask,
+        #         negative_prompt_embeds,
+        #         negative_prompt_attention_mask,
+        #     ) = self.encode_prompt(
+        #         prompt,
+        #         do_classifier_free_guidance,
+        #         negative_prompt=negative_prompt,
+        #         num_images_per_prompt=num_images_per_prompt,
+        #         device='cuda',
+        #         prompt_embeds=prompt_embeds,
+        #         negative_prompt_embeds=negative_prompt_embeds,
+        #         prompt_attention_mask=prompt_attention_mask,
+        #         negative_prompt_attention_mask=negative_prompt_attention_mask,
+        #         clean_caption=clean_caption,
+        #     )
+        #     if do_classifier_free_guidance:
+        #         prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
+        #         prompt_attention_mask = torch.cat(
+        #             [negative_prompt_attention_mask, prompt_attention_mask], dim=0
+        #          )
+
+        # if prompt == '': # TODO accomodate batch size > 1
+        #     prompt_embeds = torch.zeros(clip_embed.shape[0]*2, 1, 4096, device='cuda', )
         
         device = prompt_embeds.device
 

@@ -333,7 +333,7 @@ def main():
     scheduler = load_scheduler(scheduler_dir)
     patchifier = SymmetricPatchifier(patch_size=1)
     text_encoder = T5EncoderModel.from_pretrained(
-        "PixArt-alpha/PixArt-XL-2-1024-MS", subfolder="text_encoder", quantization_config=quantization_config,
+        "PixArt-alpha/PixArt-XL-2-1024-MS", subfolder="text_encoder", #quantization_config=quantization_config,
     )
     # if torch.cuda.is_available():
     #     text_encoder = text_encoder.to("cuda")
