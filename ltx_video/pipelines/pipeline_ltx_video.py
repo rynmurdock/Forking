@@ -874,8 +874,8 @@ class LTXVideoPipeline(DiffusionPipeline):
         # corresponds to doing no classifier free guidance.
         do_classifier_free_guidance = guidance_scale > 1.0
 
-        # if prompt != '' or negative_prompt != '':
-        #     # 3. Encode input prompt
+        # if prompt != 'NA':
+        #     ### 3. Encode input prompt
         #     (
         #         prompt_embeds,
         #         prompt_attention_mask,
@@ -897,10 +897,10 @@ class LTXVideoPipeline(DiffusionPipeline):
         #         prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
         #         prompt_attention_mask = torch.cat(
         #             [negative_prompt_attention_mask, prompt_attention_mask], dim=0
-        #          )
+        #             )
 
-        # if prompt == '': # TODO accomodate batch size > 1
-        #     prompt_embeds = torch.zeros(clip_embed.shape[0]*2, 1, 4096, device='cuda', )
+        # else: # TODO accomodate batch size > 1
+        prompt_embeds = torch.zeros(clip_embed.shape[0]*2, 1, 4096, device='cuda', )
         
         device = torch.device('cuda')#prompt_embeds.device
 
@@ -961,6 +961,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             timesteps,
             **retrieve_timesteps_kwargs,
         )
+        print(timesteps, isinstance(self.scheduler, TimestepShifter))
 
         # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
@@ -1105,7 +1106,7 @@ class LTXVideoPipeline(DiffusionPipeline):
                 is_video,
                 vae_per_channel_normalize=kwargs.get("vae_per_channel_normalize", False),
             )
-            if num_frames == 9:
+            if num_frames == 25:
                 image = self.image_processor.postprocess(image[:, :, 0], output_type=output_type)
             else:
                 image = self.image_processor.postprocess(image, output_type=output_type)

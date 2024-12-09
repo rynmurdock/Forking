@@ -24,7 +24,7 @@ import safetensors.torch
 
 def load_unet(unet_dir): # TODO don't hardcode -- use arg
     
-    unet_ckpt_path = './latest.pt'
+    unet_ckpt_path = 'latest.pt'
     
     # unet_ckpt_path = unet_dir + '/unet_diffusion_pytorch_model.safetensors'
 
@@ -100,7 +100,7 @@ def imio_write_video(file_name, images, fps=24):
 
 def get_grid(patchifier, latents, scale_grid):
     return patchifier.get_grid(
-                    orig_num_frames=2,
+                    orig_num_frames=4,
                     orig_height=latents.shape[-2],
                     orig_width=latents.shape[-1],
                     batch_size=latents.shape[0],
@@ -138,22 +138,23 @@ def compute_density_for_timestep_sampling(
 def get_loss(sample, unet, scheduler, clip_embed, idx_grid, prompt_embeds, prompt_att_masks):
     noise = torch.randn_like(sample)
     scheduler.set_timesteps(1000, sample, 'cuda')
-    u = compute_density_for_timestep_sampling('logit_normal', sample.shape[0], 0, .5).to('cuda')
+    u = compute_density_for_timestep_sampling('null(uniform)', sample.shape[0], 0, .5).to('cuda')
 
     # t = scheduler.timesteps[((u*torch.rand(sample.shape[0],))*1000).long()]
     # t = torch.rand((sample.shape[0],), device=sample.device)
     # TODO seems we need to sample reasonably & probs also shift.
     # print(sample.shape)
-    # t = scheduler.one_shift_timestep(sample, u)
-
-    t = u#scheduler.shift_timesteps(sample, u)
+    t = scheduler.one_shift_timestep(sample, u)
+    # t = u
+    # t = scheduler.shift_timesteps(sample, u)
+    assert all(t >= 0) and all (t <= 1), f'{t} has < 0 and > 1'
 
     print(t)
     assert not torch.isnan(t).any(), 'timestep NaNs'
     noised_sample = scheduler.add_noise(sample, noise, t)
 
     model_out = unet(noised_sample, idx_grid, timestep=t, 
-                    encoder_hidden_states=clip_embed, encoder_attention_mask=None,
+                    encoder_hidden_states=None, encoder_attention_mask=None,
                     cross_attention_kwargs={'clip_embed': clip_embed, "ip_scale": 1},
                     return_dict=False)
 
@@ -163,7 +164,7 @@ def get_loss(sample, unet, scheduler, clip_embed, idx_grid, prompt_embeds, promp
     assert not torch.isnan(model_out).any(), 'model_out NaNs'
     assert not torch.isnan(true_out).any(), 'true_out NaNs'
 
-    loss = torch.nn.functional.mse_loss(model_out[:, :128], true_out[:, :128])
+    loss = torch.nn.functional.mse_loss(model_out, true_out)
     return loss
 
 def callbackfn(pipe, i, t, noise_pred, latents):
@@ -174,7 +175,7 @@ def callbackfn(pipe, i, t, noise_pred, latents):
             latents=pred_original_sample,
             output_height=512//sp,
             output_width=512//sp,
-            output_num_frames=2,
+            output_num_frames=4,
             out_channels=pipe.transformer.in_channels
             // np.prod(pipe.patchifier.patch_size),
         )
@@ -214,11 +215,11 @@ def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, i
     generator.manual_seed(7)
     pipeline(prompt='', 
              negative_prompt='',
-             num_frames=9, 
+             num_frames=25, 
              num_inference_steps=40, 
              clip_embed=val_clip_embed.to(torch.float), 
              ip_scale=1,
-             guidance_scale=3.5,
+             guidance_scale=8,
              vae_per_channel_normalize=True,
              height=512,
              width=512,
@@ -230,11 +231,11 @@ def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, i
     generator.manual_seed(7)
     pipeline(prompt='', 
              negative_prompt='',
-             num_frames=9, 
+             num_frames=25, 
              num_inference_steps=40, 
              clip_embed=val_clip_embed.to(torch.float), 
              ip_scale=1,
-             guidance_scale=3.5,
+             guidance_scale=8,
              vae_per_channel_normalize=True,
              height=512,
              width=512,
@@ -255,11 +256,11 @@ def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, i
     generator.manual_seed(7)
     pipeline(prompt='', 
              negative_prompt='',
-             num_frames=9, 
+             num_frames=25, 
              num_inference_steps=40, 
              clip_embed=val_clip_embed.to(torch.float), 
              ip_scale=1,
-             guidance_scale=3.5,
+             guidance_scale=8,
              vae_per_channel_normalize=True,
              height=512,
              width=512,
@@ -270,11 +271,11 @@ def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, i
              )[0][0].save(f'outputs/cir_{it}_.png')
     pipeline(prompt='', 
              negative_prompt='',
-             num_frames=9, 
+             num_frames=25, 
              num_inference_steps=40, 
              clip_embed=val_clip_embed.to(torch.float), 
              ip_scale=1,
-             guidance_scale=3.5,
+             guidance_scale=8,
              vae_per_channel_normalize=True,
              height=512,
              width=512,
@@ -376,9 +377,9 @@ def main():
 
 
             sample = sample.unsqueeze(2).to(DTYPE) * 2 - 1
-            sample = torch.nn.functional.pad(sample, (0, 0, 0, 0, 0, 8), mode='constant', value=-1)
-            # sample = sample.repeat(1, 1, 9, 1, 1)
-            assert sample.shape[2] == 9, f'{sample.shape}'
+            # sample = torch.nn.functional.pad(sample, (0, 0, 0, 0, 0, 24), mode='constant', value=-1)
+            sample = sample.repeat(1, 1, 25, 1, 1)
+            assert sample.shape[2] == 25, f'{sample.shape}'
 
             # print(sample.min(), sample.max(), '-1 to 1')
 
