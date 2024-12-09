@@ -1340,8 +1340,8 @@ class AttnIPProc(torch.nn.Module):
             nv = self.tha_ip_v(clip_embed)
 
             ip_hidden_states = F.scaled_dot_product_attention(
-                query[:, :1024],
-                # query,
+                # query[:, :1024],
+                query,
                 nk.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2),
                 nv.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2),
                 attn_mask=None,
@@ -1359,7 +1359,7 @@ class AttnIPProc(torch.nn.Module):
             # hidden_states[:, :1024] = hidden_states[:, :1024] + ip_hidden_states[:, :1024]
 
             # TODO HACK INFERENCE REMOVE AFTER
-            hidden_states[1:, :1024] = hidden_states[1:, :1024] + .3 * ip_hidden_states[1:, :1024]
+            hidden_states[1:, ] = hidden_states[1:, ] + ip_hidden_states[1:, ]
 
         hidden_states = hidden_states / attn.rescale_output_factor
 
