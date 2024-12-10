@@ -388,13 +388,6 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
 
         # 1. Input
         hidden_states = self.patchify_proj(hidden_states)
-
-        clip_embed = cross_attention_kwargs['clip_embed']
-        clip_embed = self.tha_ip_clip_proj(clip_embed)
-        clip_embed = torch.stack([self.tha_ip_ln(l(clip_embed)) for l in self.tha_ip_to_tokens], 1)
-        cross_attention_kwargs['clip_embed'] = clip_embed
-        print(clip_embed.shape, cross_attention_kwargs['ip_scale'])
-
         if self.timestep_scale_multiplier:
             timestep = self.timestep_scale_multiplier * timestep
 
