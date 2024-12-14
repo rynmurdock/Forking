@@ -9,3 +9,4 @@ Just an ip adapter on LTX. Generalizes to video.
 - Masked loss so only first frame/two matters, not caring re padding/replicated frames (check how VAE functions!!!)
 - Put on an a100 on Colab
 - Negative & positive prompts to get more movement
+- Masking encoder hidden states from first "frame"ish

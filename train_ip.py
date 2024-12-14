@@ -35,7 +35,7 @@ def load_unet(unet_dir): # TODO don't hardcode -- use arg
         unet_state_dict = torch.load(unet_ckpt_path)
     else:
         unet_state_dict = safetensors.torch.load_file(unet_ckpt_path)
-    transformer.load_state_dict(unet_state_dict, strict=True)
+    print(transformer.load_state_dict(unet_state_dict, strict=False))
     if torch.cuda.is_available():
         transformer = transformer.cuda()
     transformer.training = True
@@ -164,7 +164,7 @@ def get_loss(sample, unet, scheduler, clip_embed, idx_grid, prompt_embeds, promp
     assert not torch.isnan(model_out).any(), 'model_out NaNs'
     assert not torch.isnan(true_out).any(), 'true_out NaNs'
 
-    loss = torch.nn.functional.mse_loss(model_out, true_out)
+    loss = torch.nn.functional.mse_loss(model_out[:, :512], true_out[:, :512])
     return loss
 
 def callbackfn(pipe, i, t, noise_pred, latents):
@@ -219,7 +219,7 @@ def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, i
              num_inference_steps=40, 
              clip_embed=val_clip_embed.to(torch.float), 
              ip_scale=1,
-             guidance_scale=8,
+             guidance_scale=2,
              vae_per_channel_normalize=True,
              height=512,
              width=512,
@@ -235,7 +235,7 @@ def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, i
              num_inference_steps=40, 
              clip_embed=val_clip_embed.to(torch.float), 
              ip_scale=1,
-             guidance_scale=8,
+             guidance_scale=2,
              vae_per_channel_normalize=True,
              height=512,
              width=512,
@@ -260,7 +260,7 @@ def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, i
              num_inference_steps=40, 
              clip_embed=val_clip_embed.to(torch.float), 
              ip_scale=1,
-             guidance_scale=8,
+             guidance_scale=4,
              vae_per_channel_normalize=True,
              height=512,
              width=512,
@@ -275,7 +275,7 @@ def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, i
              num_inference_steps=40, 
              clip_embed=val_clip_embed.to(torch.float), 
              ip_scale=1,
-             guidance_scale=8,
+             guidance_scale=4,
              vae_per_channel_normalize=True,
              height=512,
              width=512,
@@ -339,7 +339,7 @@ def main():
 
     params = [p for n, p in unet.named_parameters() if 'tha_ip' in n]# or 'to_q' in n]
     # scaler = torch.cuda.amp.GradScaler()
-    optimizer = torch.optim.AdamW(params=params, lr=1e-4, weight_decay=.0001) # TODO configs
+    optimizer = torch.optim.AdamW(params=params, lr=3e-5, weight_decay=.0001) # TODO configs
 
     video_scale_factor, vae_scale_factor, _ = get_vae_size_scale_factor(vae)
     latent_frame_rate = (24) / video_scale_factor
@@ -377,8 +377,8 @@ def main():
 
 
             sample = sample.unsqueeze(2).to(DTYPE) * 2 - 1
-            # sample = torch.nn.functional.pad(sample, (0, 0, 0, 0, 0, 24), mode='constant', value=-1)
-            sample = sample.repeat(1, 1, 25, 1, 1)
+            sample = torch.nn.functional.pad(sample, (0, 0, 0, 0, 0, 24), mode='constant', value=-1)
+            # sample = sample.repeat(1, 1, 25, 1, 1)
             assert sample.shape[2] == 25, f'{sample.shape}'
 
             # print(sample.min(), sample.max(), '-1 to 1')
