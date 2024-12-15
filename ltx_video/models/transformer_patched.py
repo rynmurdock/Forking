@@ -419,8 +419,8 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
 
         encoder_hidden_states = torch.zeros_like(hidden_states)[:, :1].repeat(1, 1, 2) # it's double the dimensionality
         
-        # encoder_hidden_states[:encoder_hidden_states.shape[0]//2] = torch.zeros_like(
-        #     encoder_hidden_states[:encoder_hidden_states.shape[0]//2])
+        # encoder_hidden_states[encoder_hidden_states.shape[0]//2] = torch.zeros_like(
+        #     encoder_hidden_states[encoder_hidden_states.shape[0]//2])
         
         # encoder_hidden_states = torch.load('prompt_embed').repeat(hidden_states.shape[0], 1, 1)
         # encoder_attention_mask = torch.load('prompt_mask').repeat(hidden_states.shape[0], 1, 1)

@@ -377,8 +377,10 @@ def main():
 
 
             sample = sample.unsqueeze(2).to(DTYPE) * 2 - 1
-            sample = torch.nn.functional.pad(sample, (0, 0, 0, 0, 0, 24), mode='constant', value=-1)
-            # sample = sample.repeat(1, 1, 25, 1, 1)
+            # before_pad = np.random.randint(0, 25)
+            # after_pad = 24 - before_pad
+            # sample = torch.nn.functional.pad(sample, (0, 0, 0, 0, before_pad, after_pad), mode='constant', value=-1)
+            sample = sample.repeat(1, 1, 25, 1, 1)
             assert sample.shape[2] == 25, f'{sample.shape}'
 
             # print(sample.min(), sample.max(), '-1 to 1')

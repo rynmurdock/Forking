@@ -390,6 +390,7 @@ def main():
         frame_rate=args.frame_rate,
         **sample,
         is_video=True,
+        is_train=False,
         vae_per_channel_normalize=True,
         conditioning_method=(
             ConditioningMethod.UNCONDITIONAL # HACK we have hardcoded differences from regular inference because we never use 
