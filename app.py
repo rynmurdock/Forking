@@ -120,7 +120,7 @@ def solver(embs, ys, alpha=1, alpha_n=1):
     v_prime = v_reference - proj(r_n, v_reference) + proj(r, neg_t.mean(0)) + alpha * r - alpha_n * r_n
     return v_prime.to('cpu', dtype=torch.float32).unsqueeze(0)
 
-def generate_gpu(clip_embed, prompt='', inference_steps=25, num_frames=81, frame_rate=24):
+def generate_gpu(clip_embed, prompt='', inference_steps=40, num_frames=81, frame_rate=24):
 
     # Prepare input for the pipeline
     sample = {
@@ -559,7 +559,6 @@ def load_pipeline():
 
     # Load models
     vae = load_vae(vae_dir)
-    unet = torch.compile(load_unet(unet_dir).to(torch.bfloat16))
     unet = load_unet(unet_dir).to(torch.bfloat16)
 
     text_encoder = T5EncoderModel.from_pretrained(
@@ -584,8 +583,10 @@ def load_pipeline():
 
     pipeline = LTXVideoPipeline(**submodel_dict)
     if torch.cuda.is_available():
-        # pipeline.transformer = torch.compile(pipeline.transformer.to("cuda")).requires_grad_(False)
-        pipeline.transformer = pipeline.transformer.to("cuda").requires_grad_(False)
+        
+        pipeline.transformer = torch.compile(pipeline.transformer.to("cuda")).requires_grad_(False)
+
+        # pipeline.transformer = pipeline.transformer.to("cuda").requires_grad_(False)
         pipeline.vae = pipeline.vae.to("cuda").requires_grad_(False)
         pipeline.text_encoder = pipeline.text_encoder
     # TODO compile model
