@@ -120,7 +120,9 @@ def solver(embs, ys, alpha=1, alpha_n=1):
     v_prime = v_reference - proj(r_n, v_reference) + proj(r, neg_t.mean(0)) + alpha * r - alpha_n * r_n
     return v_prime.to('cpu', dtype=torch.float32).unsqueeze(0)
 
-def generate_gpu(clip_embed, prompt='', inference_steps=40, num_frames=81, frame_rate=24):
+
+# num_frames up makes quality up. As you'd kinda expect
+def generate_gpu(clip_embed, prompt='', inference_steps=30, num_frames=81, frame_rate=24):
 
     # Prepare input for the pipeline
     sample = {
@@ -137,7 +139,7 @@ def generate_gpu(clip_embed, prompt='', inference_steps=40, num_frames=81, frame
     images = pipe(
         num_inference_steps=inference_steps, # TODO MAKE THIS FAST AGAIN
         num_images_per_prompt=1,
-        guidance_scale=11,
+        guidance_scale=16,
         # generator=generator,
         output_type='pt',
         callback_on_step_end=None,
@@ -238,7 +240,7 @@ def pluck_img(user_id, user_emb):
     not_rated_rows = prevs_df[[i[1]['user:rating'].get(user_id, 'gone') == 'gone' for i in prevs_df.iterrows()]]
     while len(not_rated_rows) == 0:
         not_rated_rows = prevs_df[[i[1]['user:rating'].get(user_id, 'gone') == 'gone' for i in prevs_df.iterrows()]]
-        time.sleep(.3)
+        time.sleep(.1)
     # TODO optimize this lol
     best_sim = -100000
     for i in not_rated_rows.iterrows():
@@ -259,7 +261,7 @@ def background_next_image():
         #not_rated_rows = prevs_df[[i[1]['user:rating'] == {' ': ' '} for i in prevs_df.iterrows()]]
         rated_rows = prevs_df[[i[1]['user:rating'] != {' ': ' '} for i in prevs_df.iterrows()]]
         if len(rated_rows) < 4:
-            time.sleep(.3)
+            time.sleep(.1)
         #    not_rated_rows = prevs_df[[i[1]['user:rating'] == {' ': ' '} for i in prevs_df.iterrows()]]
             return
 
@@ -494,7 +496,7 @@ Explore the latent space without text prompts based on your preferences. Learn m
         img.play(l, js='''document.querySelector('[data-testid="Lightning-player"]').loop = true''')
     
     def wait():
-        time.sleep(3)
+        time.sleep(2)
     
     with gr.Row(equal_height=True):
         b3 = gr.Button(value='👎', interactive=False, elem_id="dislike")
@@ -571,9 +573,9 @@ def load_pipeline():
     pipeline = LTXVideoPipeline(**submodel_dict)
     if torch.cuda.is_available():
         
-        # pipeline.transformer = torch.compile(pipeline.transformer.to("cuda")).requires_grad_(False)
+        pipeline.transformer = torch.compile(pipeline.transformer.to("cuda")).requires_grad_(False)
 
-        pipeline.transformer = pipeline.transformer.to("cuda").requires_grad_(False)
+        # pipeline.transformer = pipeline.transformer.to("cuda").requires_grad_(False)
 
         pipeline.vae = pipeline.vae.to("cuda").requires_grad_(False)
         pipeline.text_encoder = pipeline.text_encoder

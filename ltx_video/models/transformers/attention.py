@@ -1358,6 +1358,7 @@ class AttnIPProc(torch.nn.Module):
 
 
             # TODO HACK INFERENCE REMOVE AFTER
+            # TODO add flag for training forward/inference forward
             # hidden_states = hidden_states + ip_hidden_states
 
             # hidden_states[1:, :] = hidden_states[1:, :] + ip_hidden_states[1:, :]
@@ -1365,7 +1366,7 @@ class AttnIPProc(torch.nn.Module):
             
             # hidden_states[:, :512] = hidden_states[:, :512] + ip_hidden_states[:, :512] # * s[None, :, None,].to('cuda')
 
-            s = torch.abs(( 1 - 2 * torch.arange(hidden_states.shape[1])/hidden_states.shape[1] ))**3
+            s = torch.abs(( 1 - 2 * torch.arange(hidden_states.shape[1])/hidden_states.shape[1] ))
             hidden_states[:, :] = hidden_states[:, :] + ip_hidden_states[:, :] * s[None, :, None,].to('cuda')
             
         hidden_states = hidden_states / attn.rescale_output_factor

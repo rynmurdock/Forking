@@ -238,7 +238,7 @@ def main():
     parser.add_argument(
         "--num_frames",
         type=int,
-        default=121,
+        default=65,
         help="Number of frames to generate in the output video",
     )
     parser.add_argument(
@@ -371,7 +371,7 @@ def main():
         # "media_items": media_items,
     }
 
-    print(sample, args)
+    print(args)
 
     generator = torch.Generator(
         device="cuda" if torch.cuda.is_available() else "cpu"
