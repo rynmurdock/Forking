@@ -138,7 +138,7 @@ def compute_density_for_timestep_sampling(
 def get_loss(sample, unet, scheduler, clip_embed, idx_grid, prompt_embeds, prompt_att_masks):
     noise = torch.randn_like(sample)
     scheduler.set_timesteps(1000, sample, 'cuda')
-    u = compute_density_for_timestep_sampling('null(uniform)', sample.shape[0], 0, .5).to('cuda')
+    u = compute_density_for_timestep_sampling('logit_normal', sample.shape[0], 0, .5).to('cuda')
 
     # t = scheduler.timesteps[((u*torch.rand(sample.shape[0],))*1000).long()]
     # t = torch.rand((sample.shape[0],), device=sample.device)
@@ -339,7 +339,7 @@ def main():
 
     params = [p for n, p in unet.named_parameters() if 'tha_ip' in n]# or 'to_q' in n]
     # scaler = torch.cuda.amp.GradScaler()
-    optimizer = torch.optim.AdamW(params=params, lr=3e-5, weight_decay=.0001) # TODO configs
+    optimizer = torch.optim.AdamW(params=params, lr=4e-5, weight_decay=.0001) # TODO configs
 
     video_scale_factor, vae_scale_factor, _ = get_vae_size_scale_factor(vae)
     latent_frame_rate = (24) / video_scale_factor

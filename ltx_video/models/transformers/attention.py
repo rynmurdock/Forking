@@ -1358,12 +1358,14 @@ class AttnIPProc(torch.nn.Module):
 
 
             # TODO HACK INFERENCE REMOVE AFTER
-            # hidden_states = hidden_states + .3*ip_hidden_states
-            # hidden_states[1:, :] = hidden_states[1:, :] + ip_hidden_states[1:, :512].repeat(1, hidden_states.shape[1]//512, 1)
-            s = .8*(1-torch.arange(hidden_states.shape[1])/hidden_states.shape[1])
-            hidden_states[1:, :] = hidden_states[1:, :] + s[None, :, None,].to('cuda') * ip_hidden_states[1:, :]
-            # hidden_states[1:, :] = hidden_states[1:, :] + ip_hidden_states[1:, :256].repeat(1, hidden_states.shape[1]//256, 1)
+            # hidden_states = hidden_states + ip_hidden_states
 
+            hidden_states[1:, :] = hidden_states[1:, :] + ip_hidden_states[1:, :]
+
+            
+            # s = 1*(1-torch.arange(hidden_states.shape[1])/hidden_states.shape[1])**2
+            # hidden_states[:, :512] = hidden_states[:, :512] + ip_hidden_states[:, :512] # * s[None, :, None,].to('cuda')
+            
         hidden_states = hidden_states / attn.rescale_output_factor
 
         return hidden_states
