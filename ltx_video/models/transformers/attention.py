@@ -1365,7 +1365,7 @@ class AttnIPProc(torch.nn.Module):
             
             # hidden_states[:, :512] = hidden_states[:, :512] + ip_hidden_states[:, :512] # * s[None, :, None,].to('cuda')
 
-            s = 1*(1-torch.arange(hidden_states.shape[1])/hidden_states.shape[1])**2
+            s = torch.abs(( 1 - 2 * torch.arange(hidden_states.shape[1])/hidden_states.shape[1] ))**3
             hidden_states[:, :] = hidden_states[:, :] + ip_hidden_states[:, :] * s[None, :, None,].to('cuda')
             
         hidden_states = hidden_states / attn.rescale_output_factor

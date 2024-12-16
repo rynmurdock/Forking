@@ -59,8 +59,8 @@ prevs_df = pd.DataFrame(columns=['paths', 'embeddings', 'ips', 'user:rating', 'l
 
 start_time = time.time()
 
-prompt_list = [p for p in list(set(
-                pd.read_csv('twitter_prompts.csv').iloc[:, 1].tolist())) if type(p) == str]
+# prompt_list = [p for p in list(set(
+#                 pd.read_csv('twitter_prompts.csv').iloc[:, 1].tolist())) if type(p) == str]
 
 
 ####################### Setup Model
@@ -120,7 +120,7 @@ def solver(embs, ys, alpha=1, alpha_n=1):
     v_prime = v_reference - proj(r_n, v_reference) + proj(r, neg_t.mean(0)) + alpha * r - alpha_n * r_n
     return v_prime.to('cpu', dtype=torch.float32).unsqueeze(0)
 
-def generate_gpu(clip_embed, prompt=None, inference_steps=20, num_frames=81, frame_rate=24):
+def generate_gpu(clip_embed, prompt='', inference_steps=25, num_frames=81, frame_rate=24):
 
     # Prepare input for the pipeline
     sample = {
@@ -155,8 +155,11 @@ def generate_gpu(clip_embed, prompt=None, inference_steps=20, num_frames=81, fra
     )[0]
 
     out_clip = embed_image(images[:, :, 3])
-    mirror = torch.cat([images[0], images[0].flip(2)], 2)
-    return mirror.permute(1, 2, 3, 0), out_clip
+    
+    # loop video
+    # images = torch.cat([images, images.flip(2)], 2)
+
+    return images[0].permute(1, 2, 3, 0), out_clip
 
 @torch.no_grad()
 def generate(in_im_embs, prompt='the scene'):
@@ -288,14 +291,14 @@ def background_next_image():
 
             global glob_idx
             glob_idx += 1
-            if glob_idx >= (len(prompt_list)-1):
+            if glob_idx >= 1000:
                 glob_idx = 0
 
 
             # if glob_idx % 2 == 0:
             #     text = prompt_list[glob_idx]
             # else:
-            text = 'artistic video'
+            text = 'artistic video' # TODO unused
             print(text)
             img, embs = generate(user_emb, text)
             
@@ -549,7 +552,7 @@ logging.getLogger('apscheduler.executors.default').setLevel(logging.WARNING)
 
 
 def load_pipeline():
-    ckpt_dir = '/home/ryn_mote/Misc/ltx_video/ltx-weights/'
+    ckpt_dir = './ltx-weights/'
     unet_dir = ckpt_dir + 'unet/'
     vae_dir = ckpt_dir + "vae/"
     scheduler_dir = ckpt_dir + "scheduler/"
@@ -557,7 +560,7 @@ def load_pipeline():
     # Load models
     vae = load_vae(vae_dir)
     unet = torch.compile(load_unet(unet_dir).to(torch.bfloat16))
-    # unet = load_unet(unet_dir).to(torch.bfloat16)
+    unet = load_unet(unet_dir).to(torch.bfloat16)
 
     text_encoder = T5EncoderModel.from_pretrained(
         "PixArt-alpha/PixArt-XL-2-1024-MS", subfolder="text_encoder",# quantization_config = BitsAndBytesConfig(load_in_8bit=True),
@@ -609,9 +612,9 @@ for im, txt in [ # DO NOT NAME THESE JUST NUMBERS! apparently we assign images b
     tmp_df['paths'] = [im.replace('png', 'mp4')]
     image = Image.open(im).convert('RGB')
 
-    ims, im_emb = generate_gpu(prompt=txt, 
-                               clip_embed=embed_image(path_to_tensor(im))
-                            )
+    ims, im_emb = generate_gpu(
+                        clip_embed=embed_image(path_to_tensor(im))
+                               )
     
     # TODO cache (this is in the repo at some commit iirc)
     imio_write_video(im.replace('png', 'mp4'), ims.to('cpu', torch.float32))
