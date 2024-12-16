@@ -218,7 +218,7 @@ def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, i
              num_frames=25, 
              num_inference_steps=40, 
              clip_embed=val_clip_embed.to(torch.float), 
-             ip_scale=1,
+             ip_scale=1, # TODO unused rn
              guidance_scale=2,
              vae_per_channel_normalize=True,
              height=512,
@@ -339,7 +339,7 @@ def main():
 
     params = [p for n, p in unet.named_parameters() if 'tha_ip' in n]# or 'to_q' in n]
     # scaler = torch.cuda.amp.GradScaler()
-    optimizer = torch.optim.AdamW(params=params, lr=4e-5, weight_decay=.0001) # TODO configs
+    optimizer = torch.optim.AdamW(params=params, lr=1e-4, weight_decay=.0001) # TODO configs
 
     video_scale_factor, vae_scale_factor, _ = get_vae_size_scale_factor(vae)
     latent_frame_rate = (24) / video_scale_factor
