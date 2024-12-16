@@ -137,7 +137,7 @@ def generate_gpu(clip_embed, prompt='', inference_steps=40, num_frames=81, frame
     images = pipe(
         num_inference_steps=inference_steps, # TODO MAKE THIS FAST AGAIN
         num_images_per_prompt=1,
-        guidance_scale=9,
+        guidance_scale=11,
         # generator=generator,
         output_type='pt',
         callback_on_step_end=None,
@@ -205,7 +205,8 @@ def get_user_emb(embs, ys):
         print('Dropping at 20')
     
     if mini < 1:
-        feature_embs = torch.stack([torch.randn(8, 768), torch.randn(8, 768)]) # TODO verify shape is same as CLIP L image embed
+        feature_embs = torch.cat([torch.randn(8, 768).to(torch.half), 
+                                  torch.randn(8, 768).to(torch.half)]) # TODO verify shape is same as CLIP L image embed
         ys_t = [0, 1]
         print('Not enough ratings.')
     else:
@@ -364,8 +365,6 @@ def start(_, calibrate_prompts, user_id, request: gr.Request):
             gr.Button(value='Neither (Space)', interactive=True, visible=False), 
             gr.Button(value='👎', interactive=True),
             gr.Button(value='Start', interactive=False),
-            gr.Button(value='👍 Content', interactive=True, visible=False),
-            gr.Button(value='👍 Style', interactive=True, visible=False),
             image,
             calibrate_prompts,
             user_id,
@@ -405,7 +404,7 @@ def choose(img, choice, calibrate_prompts, user_id, request: gr.Request):
         # print(row_mask, prevs_df.loc[row_mask, 'latest_user_to_rate'], [user_id])
         prevs_df.loc[row_mask, 'latest_user_to_rate'] = [user_id]
     img, calibrate_prompts = next_image(calibrate_prompts, user_id)
-    return img, calibrate_prompts
+    return img, calibrate_prompts, gr.update(interactive=False), gr.update(interactive=False)
 
 css = '''.gradio-container{max-width: 700px !important}
 #description{text-align: center}
@@ -494,7 +493,8 @@ Explore the latent space without text prompts based on your preferences. Learn m
        )
         img.play(l, js='''document.querySelector('[data-testid="Lightning-player"]').loop = true''')
     
-    
+    def wait():
+        time.sleep(3)
     
     with gr.Row(equal_height=True):
         b3 = gr.Button(value='👎', interactive=False, elem_id="dislike")
@@ -503,40 +503,27 @@ Explore the latent space without text prompts based on your preferences. Learn m
 
         b1 = gr.Button(value='👍', interactive=False, elem_id="like")
     with gr.Row(equal_height=True):
-        b6 = gr.Button(value='👍 Style', interactive=False, elem_id="dislike like", visible=False)
-        
-        b5 = gr.Button(value='👍 Content', interactive=False, elem_id="like dislike", visible=False) 
-        
         b1.click(
         choose, 
         [img, b1, calibrate_prompts, user_id],
-        [img, calibrate_prompts, ],
-        )
+        [img, calibrate_prompts, b1, b3],
+        ).then(fn=wait).then(fn=lambda: [gr.update(interactive=True), gr.update(interactive=True)], inputs=None, outputs=[b1, b3])
         b2.click(
         choose, 
         [img, b2, calibrate_prompts, user_id],
-        [img, calibrate_prompts, ],
-        )
+        [img, calibrate_prompts, b1, b3],
+        ).then(fn=wait).then(fn=lambda: [gr.update(interactive=True), gr.update(interactive=True)], inputs=None, outputs=[b1, b3])
         b3.click(
         choose, 
         [img, b3, calibrate_prompts, user_id],
-        [img, calibrate_prompts, ],
-        )
-        b5.click(
-        choose, 
-        [img, b5, calibrate_prompts, user_id],
-        [img, calibrate_prompts, ],
-        )
-        b6.click(
-        choose, 
-        [img, b6, calibrate_prompts, user_id],
-        [img, calibrate_prompts, ],
-        )
+        [img, calibrate_prompts, b1, b3],
+        ).then(fn=wait).then(fn=lambda: [gr.update(interactive=True), gr.update(interactive=True)], inputs=None, outputs=[b1, b3])
+
     with gr.Row():
         b4 = gr.Button(value='Start')
         b4.click(start,
                  [b4, calibrate_prompts, user_id],
-                 [b1, b2, b3, b4, b5, b6, img, calibrate_prompts, user_id, ]
+                 [b1, b2, b3, b4, img, calibrate_prompts, user_id, ]
                  )
     with gr.Row():
         html = gr.HTML('''<div style='text-align:center; font-size:20px'>You will calibrate for several images and then roam. </ div><br><br><br>
@@ -584,9 +571,10 @@ def load_pipeline():
     pipeline = LTXVideoPipeline(**submodel_dict)
     if torch.cuda.is_available():
         
-        pipeline.transformer = torch.compile(pipeline.transformer.to("cuda")).requires_grad_(False)
+        # pipeline.transformer = torch.compile(pipeline.transformer.to("cuda")).requires_grad_(False)
 
-        # pipeline.transformer = pipeline.transformer.to("cuda").requires_grad_(False)
+        pipeline.transformer = pipeline.transformer.to("cuda").requires_grad_(False)
+
         pipeline.vae = pipeline.vae.to("cuda").requires_grad_(False)
         pipeline.text_encoder = pipeline.text_encoder
     # TODO compile model
