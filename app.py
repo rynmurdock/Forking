@@ -102,7 +102,7 @@ def imio_write_video(file_name, images, fps=24):
 def path_to_tensor(path):
     return torchvision.transforms.ToTensor()(Image.open(path)).unsqueeze(0).to('cuda')[:, :3]
 
-global_ref = embed_image(path_to_tensor('assets/4o.png')).squeeze() # TODO a reference image
+global_ref = embed_image(path_to_tensor('assets/1o.png')).squeeze() # TODO a reference image
 
 def proj(b, a):
     result = b * torch.dot(a, b) / torch.dot(b, b)
@@ -139,7 +139,7 @@ def generate_gpu(clip_embed, prompt='', inference_steps=30, num_frames=81, frame
     images = pipe(
         num_inference_steps=inference_steps, # TODO MAKE THIS FAST AGAIN
         num_images_per_prompt=1,
-        guidance_scale=16,
+        guidance_scale=11,
         # generator=generator,
         output_type='pt',
         callback_on_step_end=None,

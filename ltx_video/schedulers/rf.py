@@ -199,7 +199,7 @@ class RectifiedFlowScheduler(SchedulerMixin, ConfigMixin, TimestepShifter):
         if quadratic_half:
             # ~from MovieGen linear-quadratic t-schedule
             # take first half of inference steps & simulate longer-num_steps; take second half & use quadratic steps
-            timesteps = torch.linspace(1, 1 / 100, 100).to(
+            timesteps = torch.linspace(1, 1 / 250, 250).to(
                 device
             )[-num_inference_steps:]
             next_half_timesteps = (torch.linspace(1, 0, (num_inference_steps//2))**2).to(
