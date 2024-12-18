@@ -102,21 +102,22 @@ def imio_write_video(file_name, images, fps=24):
 def path_to_tensor(path):
     return torchvision.transforms.ToTensor()(Image.open(path)).unsqueeze(0).to('cuda')[:, :3]
 
+
 global_ref = embed_image(path_to_tensor('assets/1o.png')).squeeze() # TODO a reference image
 
 def proj(b, a):
     result = b * torch.dot(a, b) / torch.dot(b, b)
     return result
 
-# From https://arxiv.org/abs/2411.09003
-def solver(embs, ys, alpha=1, alpha_n=1):
+# ~from https://arxiv.org/abs/2411.09003
+def solver(embs, ys, ref, alpha=1, alpha_n=1):
     pos = [e for e, y in zip(embs, ys) if y == 1]
     neg = [e for e, y in zip(embs, ys) if y == 0]
     pos_t = torch.stack(pos)
     neg_t = torch.stack(neg)
     r = pos_t.mean(0) - neg_t.mean(0)
     r_n = neg_t.mean(0) - pos_t.mean(0)
-    v_reference = (global_ref)
+    v_reference = (global_ref) # may not want to use regular refs, because may not have typical magnitudes.
     v_prime = v_reference - proj(r_n, v_reference) + proj(r, neg_t.mean(0)) + alpha * r - alpha_n * r_n
     return v_prime.to('cpu', dtype=torch.float32).unsqueeze(0)
 
@@ -222,7 +223,10 @@ def get_user_emb(embs, ys):
         
         # print(np.array(feature_embs).shape, np.array(ys_t).shape)
     
-    sol = solver(feature_embs.to('cuda'), torch.tensor(ys_t).to('cuda')) # TODO may not be opt.
+    positives = [f for f, y in zip(feature_embs, ys) if y == 1]
+    rand_positive = positives[np.random.randint(0, len(positives))]
+
+    sol = solver(feature_embs.to('cuda'), torch.tensor(ys_t).to('cuda'), ref=rand_positive.to('cuda')) # TODO may not be opt.
     # TODO we should have clear i/o shapes & assert.
 
     # dif = torch.tensor(sol, dtype=dtype).to(device)
@@ -364,7 +368,7 @@ def start(_, calibrate_prompts, user_id, request: gr.Request):
     image, calibrate_prompts  = next_image(calibrate_prompts, user_id)
     return [
             gr.Button(value='👍', interactive=True), 
-            gr.Button(value='Neither (Space)', interactive=True, visible=False), 
+            # gr.Button(value='Neither (Space)', interactive=True, visible=False), 
             gr.Button(value='👎', interactive=True),
             gr.Button(value='Start', interactive=False),
             image,
@@ -501,7 +505,7 @@ Explore the latent space without text prompts based on your preferences. Learn m
     with gr.Row(equal_height=True):
         b3 = gr.Button(value='👎', interactive=False, elem_id="dislike")
 
-        b2 = gr.Button(value='Neither (Space)', interactive=False, elem_id="neither", visible=False)
+        # b2 = gr.Button(value='Neither (Space)', interactive=False, elem_id="neither", visible=False)
 
         b1 = gr.Button(value='👍', interactive=False, elem_id="like")
     with gr.Row(equal_height=True):
@@ -510,11 +514,13 @@ Explore the latent space without text prompts based on your preferences. Learn m
         [img, b1, calibrate_prompts, user_id],
         [img, calibrate_prompts, b1, b3],
         ).then(fn=wait).then(fn=lambda: [gr.update(interactive=True), gr.update(interactive=True)], inputs=None, outputs=[b1, b3])
-        b2.click(
-        choose, 
-        [img, b2, calibrate_prompts, user_id],
-        [img, calibrate_prompts, b1, b3],
-        ).then(fn=wait).then(fn=lambda: [gr.update(interactive=True), gr.update(interactive=True)], inputs=None, outputs=[b1, b3])
+        
+        # b2.click(
+        # choose, 
+        # [img, b2, calibrate_prompts, user_id],
+        # [img, calibrate_prompts, b1, b3],
+        # )
+
         b3.click(
         choose, 
         [img, b3, calibrate_prompts, user_id],
@@ -525,7 +531,7 @@ Explore the latent space without text prompts based on your preferences. Learn m
         b4 = gr.Button(value='Start')
         b4.click(start,
                  [b4, calibrate_prompts, user_id],
-                 [b1, b2, b3, b4, img, calibrate_prompts, user_id, ]
+                 [b1, b3, b4, img, calibrate_prompts, user_id, ]
                  )
     with gr.Row():
         html = gr.HTML('''<div style='text-align:center; font-size:20px'>You will calibrate for several images and then roam. </ div><br><br><br>

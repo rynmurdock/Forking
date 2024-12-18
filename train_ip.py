@@ -319,8 +319,8 @@ def main():
     # torch.save(positive, 'prompt_embed')
     # torch.save(positive_mask, 'prompt_mask')
 
-    # empty, empty_mask = torch.zeros_like(empty), torch.zeros_like(empty_mask)
-    # empty, empty_mask = torch.zeros_like(positive), torch.zeros_like(positive_mask)
+    empty, empty_mask = torch.zeros_like(empty), torch.zeros_like(empty_mask)
+    empty, empty_mask = torch.zeros_like(positive), torch.zeros_like(positive_mask)
 
 
 
@@ -339,7 +339,7 @@ def main():
 
     params = [p for n, p in unet.named_parameters() if 'tha_ip' in n]# or 'to_q' in n]
     # scaler = torch.cuda.amp.GradScaler()
-    optimizer = torch.optim.AdamW(params=params, lr=1e-4, weight_decay=.0001) # TODO configs
+    optimizer = torch.optim.AdamW(params=params, lr=2e-5, weight_decay=.0001) # TODO configs
 
     video_scale_factor, vae_scale_factor, _ = get_vae_size_scale_factor(vae)
     latent_frame_rate = (24) / video_scale_factor
@@ -364,7 +364,7 @@ def main():
             empty_embeds = empty.repeat(sample.shape[0], 1, 1)
             empty_att_mask = empty_mask.repeat(sample.shape[0], 1, 1)
 
-            drop_or_nah = torch.rand((prompt_embeds.shape[0])) < .1
+            drop_or_nah = torch.rand((prompt_embeds.shape[0])) < .2
             prompt_embeds[drop_or_nah] = empty_embeds[drop_or_nah]
             prompt_att_masks[drop_or_nah] = empty_att_mask[drop_or_nah]
 
@@ -372,7 +372,7 @@ def main():
             clip_media = (torch.nn.functional.interpolate(sample, (224, 224)) - .45) / .26
             clip_embed = clip_model.encode_image(clip_media)
             # print(clip_media.min(), clip_media.max(), clip_media.shape)
-            drop_or_nah = torch.rand((clip_embed.shape[0])) < .1
+            drop_or_nah = torch.rand((clip_embed.shape[0])) < .2
             clip_embed[drop_or_nah] = torch.zeros_like(clip_embed[drop_or_nah])
 
 
