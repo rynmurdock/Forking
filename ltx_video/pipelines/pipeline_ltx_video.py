@@ -1106,7 +1106,7 @@ class LTXVideoPipeline(DiffusionPipeline):
                 is_video,
                 vae_per_channel_normalize=kwargs.get("vae_per_channel_normalize", False),
             )
-            if num_frames == 25:
+            if num_frames == 25 and not is_train:
                 image = self.image_processor.postprocess(image[:, :, 0], output_type=output_type)
             else:
                 image = self.image_processor.postprocess(image, output_type=output_type)

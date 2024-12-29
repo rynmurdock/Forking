@@ -77,7 +77,7 @@ def write_video(file_name, images, fps=24):
     stream.options = {'preset': 'faster'}
     stream.thread_count = 0
     stream.width = 768
-    stream.height = 512
+    stream.height = 768
     stream.pix_fmt = "yuv420p"
 
     for img in images:
@@ -140,7 +140,7 @@ def generate_gpu(clip_embed, prompt='', inference_steps=30, num_frames=81, frame
     images = pipe(
         num_inference_steps=inference_steps, # TODO MAKE THIS FAST AGAIN
         num_images_per_prompt=1,
-        guidance_scale=11,
+        guidance_scale=7,
         # generator=generator,
         output_type='pt',
         callback_on_step_end=None,
@@ -472,16 +472,16 @@ Explore the latent space without text prompts based on your preferences. Learn m
     ''', elem_id="description")
     user_id = gr.State()
     # calibration videos -- this is a misnomer now :D
-    calibrate_prompts = gr.State([
+    calibrate_prompts = gr.State([ # TODO this is nonsense; only have one list lol
     './assets/1o.mp4',
     './assets/2o.mp4',
     './assets/3o.mp4',
     './assets/4o.mp4',
     './assets/5o.mp4',
-    # './assets/6o.mp4',
-    # './assets/7o.mp4',
-    # './assets/8o.mp4',
-    # './assets/9o.mp4',
+    './assets/6o.mp4',
+    './assets/7o.mp4',
+    './assets/8o.mp4',
+    './assets/9o.mp4',
     ])
     def l():
         return None
@@ -585,7 +585,6 @@ def load_pipeline():
 
         pipeline.vae = pipeline.vae.to("cuda").requires_grad_(False)
         pipeline.text_encoder = pipeline.text_encoder
-    # TODO compile model
     return pipeline
 
 pipe = load_pipeline()
@@ -600,10 +599,10 @@ for im, txt in [ # DO NOT NAME THESE JUST NUMBERS! apparently we assign images b
     ('./assets/3o.png', 'artistic vivid scene '),
     ('./assets/4o.png', 'artistic vivid scene '),
     ('./assets/5o.png', 'artistic vivid scene '),
-    # ('./assets/6o.png', 'vivid scene '),
-    # ('./assets/7o.png', 'vivid scene '),
-    # ('./assets/8o.png', 'vivid scene '),
-    # ('./assets/9o.png', 'vivid scene '), # TODO replace with .pt cache of activations & mp4s
+    ('./assets/6o.png', 'vivid scene '),
+    ('./assets/7o.png', 'vivid scene '),
+    ('./assets/8o.png', 'vivid scene '),
+    ('./assets/9o.png', 'vivid scene '), # TODO replace with .pt cache of activations & mp4s
     ]:
     tmp_df = pd.DataFrame(columns=['paths', 'embeddings', 'ips', 'user:rating', 'text', 'gemb'])
     tmp_df['paths'] = [im.replace('png', 'mp4')]

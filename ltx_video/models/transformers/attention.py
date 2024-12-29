@@ -1219,11 +1219,11 @@ class AttnIPProc(torch.nn.Module):
 
     def __init__(self):
         super().__init__()
-        self.tha_ip_k = torch.nn.Linear(512, 2048)
-        self.tha_ip_v = torch.nn.Linear(512, 2048)
+        self.tha_ip_k = torch.nn.Linear(768, 2048)
+        self.tha_ip_v = torch.nn.Linear(768, 2048)
         
-        self.tha_ip_rmsnorm = RMSNorm(2048, eps=1e-5)
-        self.tha_ip_t = torch.nn.Parameter(torch.tensor([.1]))
+        # self.tha_ip_rmsnorm = RMSNorm(2048, eps=1e-5)
+        # self.tha_ip_t = torch.nn.Parameter(torch.tensor([.1]))
 
     def __call__(
         self,
@@ -1340,7 +1340,7 @@ class AttnIPProc(torch.nn.Module):
             nv = self.tha_ip_v(clip_embed)
 
             ip_hidden_states = F.scaled_dot_product_attention(
-                query,
+                query[:, :1024],
                 # query,
                 nk.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2),
                 nv.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2),
@@ -1351,7 +1351,7 @@ class AttnIPProc(torch.nn.Module):
 
             ip_hidden_states = ip_hidden_states.transpose(1, 2).reshape(
                 batch_size, -1, attn.heads * head_dim
-            ) * self.tha_ip_t[None, None]
+            )# * self.tha_ip_t[None, None]
 
             ip_hidden_states = ip_hidden_states * ip_scale
             assert ip_hidden_states.shape == hidden_states.shape, f'{ip_hidden_states.shape} and {hidden_states.shape} ip & hidden shapes'
@@ -1361,13 +1361,17 @@ class AttnIPProc(torch.nn.Module):
             # TODO add flag for training forward/inference forward
             # hidden_states = hidden_states + ip_hidden_states
 
-            # hidden_states[1:, :] = hidden_states[1:, :] + ip_hidden_states[1:, :]
+
+            # hidden_states[1:] = hidden_states[1:] + ip_hidden_states[1:]
 
             
-            # hidden_states[:, :512] = hidden_states[:, :512] + ip_hidden_states[:, :512] # * s[None, :, None,].to('cuda')
+            hidden_states[:, :1024] = hidden_states[:, :1024] + ip_hidden_states[:, :1024] # * s[None, :, None,].to('cuda')
+            hidden_states[:, -1024:] = hidden_states[:, -1024:] + ip_hidden_states[:, -1024:] # * s[None, :, None,].to('cuda')
 
-            s = torch.abs(( 1 - 2 * torch.arange(hidden_states.shape[1])/hidden_states.shape[1] ))
-            hidden_states[:, :] = hidden_states[:, :] + ip_hidden_states[:, :] * s[None, :, None,].to('cuda')
+            # s = .8*torch.torch.abs(( 1 - 2 * torch.arange(hidden_states.shape[1])/hidden_states.shape[1] ))
+            # s = torch.max(s, torch.ones_like(s) * .2)
+
+            # hidden_states[:, :] = hidden_states[:, :] + ip_hidden_states[:, :] * s[None, :, None,].to('cuda')
             
         hidden_states = hidden_states / attn.rescale_output_factor
 

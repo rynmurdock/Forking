@@ -19,7 +19,6 @@ from ltx_video.utils.conditioning_method import ConditioningMethod
 from inference import load_vae, load_scheduler, load_image_to_tensor_with_resize_and_crop
 from transformers import T5EncoderModel, T5Tokenizer
 
-
 import safetensors.torch
 
 def load_unet(unet_dir): # TODO don't hardcode -- use arg
@@ -38,6 +37,9 @@ def load_unet(unet_dir): # TODO don't hardcode -- use arg
     print(transformer.load_state_dict(unet_state_dict, strict=False))
     if torch.cuda.is_available():
         transformer = transformer.cuda()
+
+    # NOTE WILL EFF UP SAVING.
+    # transformer = torch.compile(transformer)
     transformer.training = True
     transformer.train = True
     return transformer
@@ -144,8 +146,8 @@ def get_loss(sample, unet, scheduler, clip_embed, idx_grid, prompt_embeds, promp
     # t = torch.rand((sample.shape[0],), device=sample.device)
     # TODO seems we need to sample reasonably & probs also shift.
     # print(sample.shape)
-    t = scheduler.one_shift_timestep(sample, u)
-    # t = u
+    u = scheduler.one_shift_timestep(sample, u)
+    t = u
     # t = scheduler.shift_timesteps(sample, u)
     assert all(t >= 0) and all (t <= 1), f'{t} has < 0 and > 1'
 
@@ -164,7 +166,7 @@ def get_loss(sample, unet, scheduler, clip_embed, idx_grid, prompt_embeds, promp
     assert not torch.isnan(model_out).any(), 'model_out NaNs'
     assert not torch.isnan(true_out).any(), 'true_out NaNs'
 
-    loss = torch.nn.functional.mse_loss(model_out[:, :512], true_out[:, :512])
+    loss = torch.nn.functional.mse_loss(model_out, true_out)
     return loss
 
 def callbackfn(pipe, i, t, noise_pred, latents):
@@ -219,7 +221,7 @@ def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, i
              num_inference_steps=40, 
              clip_embed=val_clip_embed.to(torch.float), 
              ip_scale=1, # TODO unused rn
-             guidance_scale=2,
+             guidance_scale=7,
              vae_per_channel_normalize=True,
              height=512,
              width=512,
@@ -235,7 +237,7 @@ def val(unet, patchifier, vae, scheduler, clip_model, text_encoder, tokenizer, i
              num_inference_steps=40, 
              clip_embed=val_clip_embed.to(torch.float), 
              ip_scale=1,
-             guidance_scale=2,
+             guidance_scale=7,
              vae_per_channel_normalize=True,
              height=512,
              width=512,
@@ -339,7 +341,7 @@ def main():
 
     params = [p for n, p in unet.named_parameters() if 'tha_ip' in n]# or 'to_q' in n]
     # scaler = torch.cuda.amp.GradScaler()
-    optimizer = torch.optim.AdamW(params=params, lr=2e-5, weight_decay=.0001) # TODO configs
+    optimizer = torch.optim.AdamW(params=params, lr=4e-5, weight_decay=.0001) # TODO configs
 
     video_scale_factor, vae_scale_factor, _ = get_vae_size_scale_factor(vae)
     latent_frame_rate = (24) / video_scale_factor
@@ -419,7 +421,7 @@ def main():
             optimizer.step()
             optimizer.zero_grad()
 
-
+            die
             if (ind) % 400 == 0:
                 if ind > 0:
                     torch.save(unet.state_dict(), './latest.pt')

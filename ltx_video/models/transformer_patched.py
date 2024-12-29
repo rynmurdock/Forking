@@ -99,12 +99,12 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         # nn.init.constant_(self.attn2_proj[0].weight, 0)
 
         self.tha_ip_clip_proj = torch.nn.Sequential(
-            torch.nn.Linear(768, 512),
+            torch.nn.Linear(768, 768),
             torch.nn.SiLU(),
-            torch.nn.Linear(512, 512),
+            torch.nn.Linear(768, 768),
         )
-        self.tha_ip_ln = torch.nn.LayerNorm(512)
-        self.attn2_proj_tha_ip_to_tokens = torch.nn.ModuleList([torch.nn.Linear(512, 512) for i in range(8)])
+        self.tha_ip_ln = torch.nn.LayerNorm(768)
+        self.attn2_proj_tha_ip_to_tokens = torch.nn.ModuleList([torch.nn.Linear(768, 768) for i in range(4)])
 
 
         self.positional_embedding_type = positional_embedding_type
@@ -429,9 +429,10 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         clip_embed = cross_attention_kwargs['clip_embed'][:]
         assert clip_embed.shape[0] == hidden_states.shape[0]
         # clip_embed = clip_embed / clip_embed.norm(dim=-1, keepdim=True)
-        clip_embed = self.tha_ip_clip_proj(clip_embed).view(hidden_states.shape[0], 512)
+        clip_embed = self.tha_ip_clip_proj(clip_embed).view(hidden_states.shape[0], 768)
         clip_embed = torch.stack([l(clip_embed) for l in self.attn2_proj_tha_ip_to_tokens], 1)
-        cross_attention_kwargs['clip_embed'] = self.tha_ip_ln(clip_embed)
+        # cross_attention_kwargs['clip_embed'] = self.tha_ip_ln(clip_embed)
+        cross_attention_kwargs['clip_embed'] = clip_embed
 
         if self.timestep_scale_multiplier:
             timestep = self.timestep_scale_multiplier * timestep

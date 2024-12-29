@@ -54,6 +54,7 @@ def load_vae(vae_dir):
     return vae.to(torch.bfloat16)
 
 
+# NOTE this is not identical to the train_ip version!
 def load_unet(unet_dir):
     unet_ckpt_path = './' + "latest.pt"
 
@@ -66,6 +67,14 @@ def load_unet(unet_dir):
         unet_state_dict = torch.load(unet_ckpt_path)
     else:
         unet_state_dict = safetensors.torch.load_file(unet_ckpt_path)
+
+    # handle torch compile saving quirk.
+
+    unwanted_prefix = '_orig_mod.' 
+    for k,v in list(unet_state_dict.items()): 
+        if k.startswith(unwanted_prefix): 
+            unet_state_dict[k[len(unwanted_prefix):]] = unet_state_dict.pop(k) 
+
     transformer.load_state_dict(unet_state_dict, strict=False)
     if torch.cuda.is_available():
         transformer = transformer.cuda()
