@@ -13,37 +13,42 @@ dtype = torch.bfloat16
 
 from transformers import T5EncoderModel, T5Tokenizer, BitsAndBytesConfig
 
-
-from ltx_video.models.autoencoders.causal_video_autoencoder import (
-    CausalVideoAutoencoder,
-)
 from ltx_video.models.transformers.symmetric_patchifier import SymmetricPatchifier
-from ltx_video.models.transformers.transformer3d import Transformer3DModel
 from ltx_video.pipelines.pipeline_ltx_video import LTXVideoPipeline
-from ltx_video.schedulers.rf import RectifiedFlowScheduler
 from ltx_video.utils.conditioning_method import ConditioningMethod
-from inference import load_unet, load_vae, load_scheduler, load_image_to_tensor_with_resize_and_crop
+from ip_inference import load_unet, load_vae, load_scheduler
 
 import spaces
-
-import matplotlib.pyplot as plt
-import matplotlib
-import logging
+import torchvision
 
 import os
 import imageio
 import gradio as gr
 import numpy as np
-from sklearn.svm import LinearSVC
 import pandas as pd
-from apscheduler.schedulers.background import BackgroundScheduler
-import sched
-import threading
 
-import random
+from apscheduler.schedulers.background import BackgroundScheduler
+import logging
+
 import time
 from PIL import Image
 # from safety_checker_improved import maybe_nsfw
+
+import clip
+
+
+
+def get_clip(): # TODO give as input
+    model, preprocess = clip.load("ViT-L/14", device=DEVICE)
+    return model.requires_grad_(False)# doesn't cast the layernorm smh smh .to(DTYPE)
+
+clip_model = get_clip()
+
+def embed_image(sample):
+    # [0, 1]
+    clip_media = (torch.nn.functional.interpolate(sample, (224, 224)) - .45) / .26
+    clip_embed = clip_model.encode_image(clip_media)
+    return clip_embed
 
 
 torch.set_grad_enabled(False)
@@ -52,11 +57,10 @@ torch.backends.cudnn.allow_tf32 = True
 
 prevs_df = pd.DataFrame(columns=['paths', 'embeddings', 'ips', 'user:rating', 'latest_user_to_rate', 'from_user_id', 'text', 'gemb'])
 
-import spaces
 start_time = time.time()
 
-prompt_list = [p for p in list(set(
-                pd.read_csv('twitter_prompts.csv').iloc[:, 1].tolist())) if type(p) == str]
+# prompt_list = [p for p in list(set(
+#                 pd.read_csv('twitter_prompts.csv').iloc[:, 1].tolist())) if type(p) == str]
 
 
 ####################### Setup Model
@@ -73,7 +77,7 @@ def write_video(file_name, images, fps=24):
     stream.options = {'preset': 'faster'}
     stream.thread_count = 0
     stream.width = 768
-    stream.height = 512
+    stream.height = 768
     stream.pix_fmt = "yuv420p"
 
     for img in images:
@@ -95,64 +99,70 @@ def imio_write_video(file_name, images, fps=24):
         writer.append_data(np.array(im))
     writer.close()
 
-def proj(a, b):
+def path_to_tensor(path):
+    return torchvision.transforms.ToTensor()(Image.open(path)).unsqueeze(0).to('cuda')[:, :3]
+
+
+global_ref = embed_image(path_to_tensor('assets/1o.png')).squeeze() # TODO a reference image
+
+def proj(b, a):
     result = b * torch.dot(a, b) / torch.dot(b, b)
     return result
 
-# From https://arxiv.org/abs/2411.09003
-@spaces.GPU()
-def solver(embs, ys, ):
+# ~from https://arxiv.org/abs/2411.09003
+def solver(embs, ys, ref, alpha=1, alpha_n=1):
     pos = [e for e, y in zip(embs, ys) if y == 1]
     neg = [e for e, y in zip(embs, ys) if y == 0]
-    pos_t = torch.stack(pos)[:len(neg)].mean(0)
-    neg_t = torch.stack(neg)[:len(pos)].mean(0)
-    r = pos_t - neg_t
-    return r.to('cpu', dtype=torch.float32), neg_t.to('cpu', dtype=torch.float32)
+    pos_t = torch.stack(pos)
+    neg_t = torch.stack(neg)
+    r = pos_t.mean(0) - neg_t.mean(0)
+    r_n = neg_t.mean(0) - pos_t.mean(0)
+    v_reference = (global_ref) # may not want to use regular refs, because may not have typical magnitudes.
+    v_prime = v_reference - proj(r_n, v_reference) + proj(r, neg_t.mean(0)) + alpha * r - alpha_n * r_n
+    return v_prime.to('cpu', dtype=torch.float32).unsqueeze(0)
 
-@spaces.GPU()
-def generate_gpu(control_vector, prompt='a photo', media_items=None, inference_steps=20, num_frames=57, alpha=.5, frame_rate=24):
-    if media_items is not None:
-        media_items = load_image_to_tensor_with_resize_and_crop(media_items, 512, 768)
 
-    assert control_vector is None or isinstance(control_vector, tuple)
+# num_frames up makes quality up. As you'd kinda expect
+def generate_gpu(clip_embed, prompt='', inference_steps=30, num_frames=81, frame_rate=24):
 
     # Prepare input for the pipeline
     sample = {
         "prompt": prompt,
         "prompt_attention_mask": None,
-        "negative_prompt": 'still low quality image',
+        "negative_prompt": None,
         "negative_prompt_attention_mask": None,
-        "media_items": media_items,
+        'clip_embed': clip_embed.to('cuda'),
     }
 
     # generator = torch.Generator(
     #     device="cuda" if torch.cuda.is_available() else "cpu"
     # ).manual_seed(8)
-    images, activations = pipe(
+    images = pipe(
         num_inference_steps=inference_steps, # TODO MAKE THIS FAST AGAIN
         num_images_per_prompt=1,
-        guidance_scale=4,
+        guidance_scale=7,
         # generator=generator,
         output_type='pt',
         callback_on_step_end=None,
         height=512,
-        width=768,
+        width=512,
         num_frames=num_frames,
         frame_rate=frame_rate,
         **sample,
         is_video=True,
         vae_per_channel_normalize=True,
         conditioning_method=(
-            ConditioningMethod.FIRST_FRAME
-            if media_items is not None
-            else ConditioningMethod.UNCONDITIONAL
+            ConditioningMethod.UNCONDITIONAL
         ),
         mixed_precision=True,
-        control_vector=control_vector,
-        alpha=alpha
-    )
-                                            # COND vector timestep, channels
-    return images[0].permute(1, 2, 3, 0), activations.squeeze().to('cpu', torch.float32)
+    )[0]
+
+    out_clip = embed_image(images[:, :, 3])
+    
+    # loop video
+    # images = torch.cat([images, images.flip(2)], 2)
+
+    return images[0].permute(1, 2, 3, 0), out_clip
 
 @torch.no_grad()
 def generate(in_im_embs, prompt='the scene'):
@@ -171,7 +181,7 @@ def generate(in_im_embs, prompt='the scene'):
     
     # output.images[0].save(path)
     imio_write_video(path, output.to('cpu', torch.float32))
-    return path, im_emb
+    return path, im_emb.to('cpu')
 
 
 #######################
@@ -198,7 +208,8 @@ def get_user_emb(embs, ys):
         print('Dropping at 20')
     
     if mini < 1:
-        feature_embs = torch.stack([torch.randn(8, 2, 1, 2048), torch.randn(8, 2, 1, 2048)])
+        feature_embs = torch.cat([torch.randn(8, 768).to(torch.half), 
+                                  torch.randn(8, 768).to(torch.half)]) # TODO verify shape is same as CLIP L image embed
         ys_t = [0, 1]
         print('Not enough ratings.')
     else:
@@ -212,7 +223,12 @@ def get_user_emb(embs, ys):
         
         # print(np.array(feature_embs).shape, np.array(ys_t).shape)
     
-    sol = solver(feature_embs, ys_t)
+    positives = [f for f, y in zip(feature_embs, ys) if y == 1]
+    rand_positive = positives[np.random.randint(0, len(positives))]
+
+    sol = solver(feature_embs.to('cuda'), torch.tensor(ys_t).to('cuda'), ref=rand_positive.to('cuda')) # TODO may not be opt.
+    # TODO we should have clear i/o shapes & assert.
+
     # dif = torch.tensor(sol, dtype=dtype).to(device)
     
     # # could j have a base vector of a black image
@@ -234,9 +250,8 @@ def pluck_img(user_id, user_emb):
     for i in not_rated_rows.iterrows():
         # TODO sloppy .to but it is 3am.
         a = i[1]['embeddings']
-        # USING 0TH timestep activations (we have multiple timesteps ofc) & 0th of sequence
-        print(user_emb[0][0][0][0].shape,'user_emb in pluck_img', a[0][0][0][0].detach().to('cpu'))
-        sim = torch.cosine_similarity(a[0][0][0][0].detach().to('cpu'), user_emb[0][0][0][0].detach().to('cpu'), 0)
+        assert a.shape == user_emb.shape and len(a.shape) == 2, f'{a.shape} must = {user_emb.shape} and shape must be 2 long'
+        sim = torch.cosine_similarity(a.detach().to('cpu'), user_emb.detach().to('cpu'), 1)
         if sim > best_sim:
             best_sim = sim
             best_row = i[1]
@@ -283,14 +298,14 @@ def background_next_image():
 
             global glob_idx
             glob_idx += 1
-            if glob_idx >= (len(prompt_list)-1):
+            if glob_idx >= 1000:
                 glob_idx = 0
 
 
             # if glob_idx % 2 == 0:
             #     text = prompt_list[glob_idx]
             # else:
-            text = 'artistic video'
+            text = 'artistic video' # TODO unused
             print(text)
             img, embs = generate(user_emb, text)
             
@@ -353,11 +368,9 @@ def start(_, calibrate_prompts, user_id, request: gr.Request):
     image, calibrate_prompts  = next_image(calibrate_prompts, user_id)
     return [
             gr.Button(value='👍', interactive=True), 
-            gr.Button(value='Neither (Space)', interactive=True, visible=False), 
+            # gr.Button(value='Neither (Space)', interactive=True, visible=False), 
             gr.Button(value='👎', interactive=True),
             gr.Button(value='Start', interactive=False),
-            gr.Button(value='👍 Content', interactive=True, visible=False),
-            gr.Button(value='👍 Style', interactive=True, visible=False),
             image,
             calibrate_prompts,
             user_id,
@@ -397,7 +410,7 @@ def choose(img, choice, calibrate_prompts, user_id, request: gr.Request):
         # print(row_mask, prevs_df.loc[row_mask, 'latest_user_to_rate'], [user_id])
         prevs_df.loc[row_mask, 'latest_user_to_rate'] = [user_id]
     img, calibrate_prompts = next_image(calibrate_prompts, user_id)
-    return img, calibrate_prompts
+    return img, calibrate_prompts, gr.update(interactive=False), gr.update(interactive=False)
 
 css = '''.gradio-container{max-width: 700px !important}
 #description{text-align: center}
@@ -459,16 +472,16 @@ Explore the latent space without text prompts based on your preferences. Learn m
     ''', elem_id="description")
     user_id = gr.State()
     # calibration videos -- this is a misnomer now :D
-    calibrate_prompts = gr.State([
-    './1o.mp4',
-    './2o.mp4',
-    './3o.mp4',
-    './4o.mp4',
-    './5o.mp4',
-    # './6o.mp4',
-    # './7o.mp4',
-    # './8o.mp4',
-    # './9o.mp4',
+    calibrate_prompts = gr.State([ # TODO this is nonsense; only have one list lol
+    './assets/1o.mp4',
+    './assets/2o.mp4',
+    './assets/3o.mp4',
+    './assets/4o.mp4',
+    './assets/5o.mp4',
+    './assets/6o.mp4',
+    './assets/7o.mp4',
+    './assets/8o.mp4',
+    './assets/9o.mp4',
     ])
     def l():
         return None
@@ -486,49 +499,39 @@ Explore the latent space without text prompts based on your preferences. Learn m
        )
         img.play(l, js='''document.querySelector('[data-testid="Lightning-player"]').loop = true''')
     
-    
+    def wait():
+        time.sleep(2)
     
     with gr.Row(equal_height=True):
         b3 = gr.Button(value='👎', interactive=False, elem_id="dislike")
 
-        b2 = gr.Button(value='Neither (Space)', interactive=False, elem_id="neither", visible=False)
+        # b2 = gr.Button(value='Neither (Space)', interactive=False, elem_id="neither", visible=False)
 
         b1 = gr.Button(value='👍', interactive=False, elem_id="like")
     with gr.Row(equal_height=True):
-        b6 = gr.Button(value='👍 Style', interactive=False, elem_id="dislike like", visible=False)
-        
-        b5 = gr.Button(value='👍 Content', interactive=False, elem_id="like dislike", visible=False) 
-        
         b1.click(
         choose, 
         [img, b1, calibrate_prompts, user_id],
-        [img, calibrate_prompts, ],
-        )
-        b2.click(
-        choose, 
-        [img, b2, calibrate_prompts, user_id],
-        [img, calibrate_prompts, ],
-        )
+        [img, calibrate_prompts, b1, b3],
+        ).then(fn=wait).then(fn=lambda: [gr.update(interactive=True), gr.update(interactive=True)], inputs=None, outputs=[b1, b3])
+        
+        # b2.click(
+        # choose, 
+        # [img, b2, calibrate_prompts, user_id],
+        # [img, calibrate_prompts, b1, b3],
+        # )
+
         b3.click(
         choose, 
         [img, b3, calibrate_prompts, user_id],
-        [img, calibrate_prompts, ],
-        )
-        b5.click(
-        choose, 
-        [img, b5, calibrate_prompts, user_id],
-        [img, calibrate_prompts, ],
-        )
-        b6.click(
-        choose, 
-        [img, b6, calibrate_prompts, user_id],
-        [img, calibrate_prompts, ],
-        )
+        [img, calibrate_prompts, b1, b3],
+        ).then(fn=wait).then(fn=lambda: [gr.update(interactive=True), gr.update(interactive=True)], inputs=None, outputs=[b1, b3])
+
     with gr.Row():
         b4 = gr.Button(value='Start')
         b4.click(start,
                  [b4, calibrate_prompts, user_id],
-                 [b1, b2, b3, b4, b5, b6, img, calibrate_prompts, user_id, ]
+                 [b1, b3, b4, img, calibrate_prompts, user_id, ]
                  )
     with gr.Row():
         html = gr.HTML('''<div style='text-align:center; font-size:20px'>You will calibrate for several images and then roam. </ div><br><br><br>
@@ -537,21 +540,22 @@ Explore the latent space without text prompts based on your preferences. Learn m
 <div style='text-align:center; font-size:14px'>Thanks to @multimodalart for their contributions to the demo, esp. the interface and @maxbittker for feedback.
 </ div>''')
 
-# TODO quiet logging
-
 scheduler = BackgroundScheduler()
-scheduler.add_job(func=background_next_image, trigger="interval", seconds=.01)
+scheduler.add_job(func=background_next_image, trigger="interval", seconds=.1)
 scheduler.start()
+logging.getLogger('apscheduler.executors.default').setLevel(logging.WARNING)
+
 
 def load_pipeline():
-    ckpt_dir = '/home/ryn_mote/Misc/ltx_video/ltx-weights/'
-    unet_dir = ckpt_dir + "unet/"
+    ckpt_dir = './ltx-weights/'
+    unet_dir = ckpt_dir + 'unet/'
     vae_dir = ckpt_dir + "vae/"
     scheduler_dir = ckpt_dir + "scheduler/"
 
     # Load models
     vae = load_vae(vae_dir)
     unet = load_unet(unet_dir).to(torch.bfloat16)
+
     text_encoder = T5EncoderModel.from_pretrained(
         "PixArt-alpha/PixArt-XL-2-1024-MS", subfolder="text_encoder",# quantization_config = BitsAndBytesConfig(load_in_8bit=True),
     ).requires_grad_(False)
@@ -574,11 +578,13 @@ def load_pipeline():
 
     pipeline = LTXVideoPipeline(**submodel_dict)
     if torch.cuda.is_available():
-        # pipeline.transformer = torch.compile(pipeline.transformer.to("cuda")).requires_grad_(False)
-        pipeline.transformer = pipeline.transformer.to("cuda").requires_grad_(False)
+        
+        pipeline.transformer = torch.compile(pipeline.transformer.to("cuda")).requires_grad_(False)
+
+        # pipeline.transformer = pipeline.transformer.to("cuda").requires_grad_(False)
+
         pipeline.vae = pipeline.vae.to("cuda").requires_grad_(False)
-        pipeline.text_encoder = pipeline.text_encoder.to('cuda', torch.bfloat16).requires_grad_(False)
-    # TODO compile model
+        pipeline.text_encoder = pipeline.text_encoder
     return pipeline
 
 pipe = load_pipeline()
@@ -588,36 +594,25 @@ pipe = load_pipeline()
 for im, txt in [ # DO NOT NAME THESE JUST NUMBERS! apparently we assign images by number
     
     # TODO cache these
-    ('./1o.png', 'artistic vivid scene '),
-    ('./2o.png', 'artistic vivid scene '),
-    ('./3o.png', 'artistic vivid scene '),
-    ('./4o.png', 'artistic vivid scene '),
-    ('./5o.png', 'artistic vivid scene '),
-    # ('./6o.png', 'vivid scene '),
-    # ('./7o.png', 'vivid scene '),
-    # ('./8o.png', 'vivid scene '),
-    # ('./9o.png', 'vivid scene '), # TODO replace with .pt cache of activations & mp4s
+    ('./assets/1o.png', 'artistic vivid scene '),
+    ('./assets/2o.png', 'artistic vivid scene '),
+    ('./assets/3o.png', 'artistic vivid scene '),
+    ('./assets/4o.png', 'artistic vivid scene '),
+    ('./assets/5o.png', 'artistic vivid scene '),
+    ('./assets/6o.png', 'vivid scene '),
+    ('./assets/7o.png', 'vivid scene '),
+    ('./assets/8o.png', 'vivid scene '),
+    ('./assets/9o.png', 'vivid scene '), # TODO replace with .pt cache of activations & mp4s
     ]:
     tmp_df = pd.DataFrame(columns=['paths', 'embeddings', 'ips', 'user:rating', 'text', 'gemb'])
     tmp_df['paths'] = [im.replace('png', 'mp4')]
     image = Image.open(im).convert('RGB')
 
-
-    LOAD_NOT_SAVE = False
-    pt_name = im.replace('png', 'pt')
+    ims, im_emb = generate_gpu(
+                        clip_embed=embed_image(path_to_tensor(im))
+                               )
     
-    if not LOAD_NOT_SAVE:
-        # # # TODO use image but still gather activations
-        ims, im_emb = generate_gpu(control_vector=None, 
-                                prompt=txt, 
-                                media_items=im, 
-                                )
-        torch.save(ims.to('cpu', torch.float32), im.replace('png', 'image.pt'))
-        torch.save(im_emb.detach().to('cpu'), pt_name)
-    else:
-        ims = torch.load(im.replace('png', 'image.pt'))
-        im_emb = torch.load(f'{pt_name}')
-
+    # TODO cache (this is in the repo at some commit iirc)
     imio_write_video(im.replace('png', 'mp4'), ims.to('cpu', torch.float32))
     
     

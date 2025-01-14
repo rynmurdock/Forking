@@ -6,6 +6,13 @@ __pycache__/
 # C extensions
 *.so
 
+prompt_embed
+prompt_mask
+
+# mine
+assets/
+*.pt
+
 # Distribution / packaging
 .Python
 build/

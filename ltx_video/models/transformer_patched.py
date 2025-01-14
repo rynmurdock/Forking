@@ -15,15 +15,15 @@ from torch import nn
 from ltx_video.models.transformers.attention import BasicTransformerBlock
 from ltx_video.models.transformers.embeddings import get_3d_sincos_pos_embed
 
+from diffusers.models.normalization import RMSNorm
+
+
 logger = logging.get_logger(__name__)
 
-def batch_proj(a, b):
+def batch_proj(b, a):
     out = b * (a * b).sum(-1, keepdim=True) / (b*b).sum(-1, keepdim=True)
     return out
 
-def proj(a, b):
-    result = b * torch.dot(a, b) / torch.dot(b, b)
-    return result
 
 @dataclass
 class Transformer3DModelOutput(BaseOutput):
@@ -88,6 +88,24 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         self.project_to_2d_pos = project_to_2d_pos
 
         self.patchify_proj = nn.Linear(in_channels, inner_dim, bias=True)
+
+        # self.attn2_proj = torch.nn.Sequential(
+        #     torch.nn.Linear(768, 512, bias=False),
+        #     torch.nn.SiLU(),
+        #     torch.nn.Linear(512, 2048, bias=False),
+        #     RMSNorm(2048, eps=1e-6)
+        # )
+        # nn.init.constant_(self.attn2_proj[0].weight, 0)
+        # nn.init.constant_(self.attn2_proj[0].weight, 0)
+
+        self.tha_ip_clip_proj = torch.nn.Sequential(
+            torch.nn.Linear(768, 768),
+            torch.nn.SiLU(),
+            torch.nn.Linear(768, 768),
+        )
+        self.tha_ip_ln = torch.nn.LayerNorm(768)
+        self.attn2_proj_tha_ip_to_tokens = torch.nn.ModuleList([torch.nn.Linear(768, 768) for i in range(4)])
+
 
         self.positional_embedding_type = positional_embedding_type
         self.positional_embedding_theta = positional_embedding_theta
@@ -324,7 +342,7 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         encoder_attention_mask: Optional[torch.Tensor] = None,
         return_dict: bool = False,
         control_vector = None,
-        alpha = 1.5,
+        alpha = 0,
         ind_i=0
     ):
         """
@@ -396,6 +414,26 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         # 1. Input
         hidden_states = self.patchify_proj(hidden_states)
 
+        # print(hidden_states.shape, indices_grid, indices_grid.shape)
+        # encoder_hidden_states = self.attn2_proj(encoder_hidden_states).unsqueeze(1)
+
+        encoder_hidden_states = torch.zeros_like(hidden_states)[:, :1].repeat(1, 1, 2) # it's double the dimensionality
+        
+        # encoder_hidden_states[encoder_hidden_states.shape[0]//2] = torch.zeros_like(
+        #     encoder_hidden_states[encoder_hidden_states.shape[0]//2])
+        
+        # encoder_hidden_states = torch.load('prompt_embed').repeat(hidden_states.shape[0], 1, 1)
+        # encoder_attention_mask = torch.load('prompt_mask').repeat(hidden_states.shape[0], 1, 1)
+
+
+        clip_embed = cross_attention_kwargs['clip_embed'][:]
+        assert clip_embed.shape[0] == hidden_states.shape[0]
+        # clip_embed = clip_embed / clip_embed.norm(dim=-1, keepdim=True)
+        clip_embed = self.tha_ip_clip_proj(clip_embed).view(hidden_states.shape[0], 768)
+        clip_embed = torch.stack([l(clip_embed) for l in self.attn2_proj_tha_ip_to_tokens], 1)
+        # cross_attention_kwargs['clip_embed'] = self.tha_ip_ln(clip_embed)
+        cross_attention_kwargs['clip_embed'] = clip_embed
+
         if self.timestep_scale_multiplier:
             timestep = self.timestep_scale_multiplier * timestep
 
@@ -423,7 +461,7 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
             batch_size, -1, embedded_timestep.shape[-1]
         )
 
-        # 2. Blocks
+        # # # 2. Blocks
         if self.caption_projection is not None:
             batch_size = hidden_states.shape[0]
             encoder_hidden_states = self.caption_projection(encoder_hidden_states)
@@ -470,31 +508,31 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
                     class_labels=class_labels,
                 )
 
-            activations = hidden_states
-            if idx == 0:
-                # TODO verify just regular gen works sans control vectors...
-                if control_vector is not None:
+            # activations = hidden_states
+            # if idx == 0:
+            #     # TODO verify just regular gen works sans control vectors...
+            #     if control_vector is not None:
 
-                    # # getting n & r, then index with ind_i (timestep index)
-                    # for seq_ind in range(hidden_states.shape[1]):
-                    #     neg_t = control_vector[1][ind_i].to(hidden_states.device, hidden_states.dtype)
-                    #     r = control_vector[0][ind_i].to(hidden_states.device, hidden_states.dtype)
+            #         # # getting n & r, then index with ind_i (timestep index)
+            #         # for seq_ind in range(hidden_states.shape[1]):
+            #         #     neg_t = control_vector[1][ind_i].to(hidden_states.device, hidden_states.dtype)
+            #         #     r = control_vector[0][ind_i].to(hidden_states.device, hidden_states.dtype)
 
-                    #     hidden_states[0, seq_ind] = (hidden_states[0, seq_ind] - 
-                    #                                  proj(r[0, seq_ind], hidden_states[0, seq_ind]) + 
-                    #                                  proj(r[0, seq_ind], neg_t[0, seq_ind]) + alpha * r[0, seq_ind])
-                    #     hidden_states[1, seq_ind] = (hidden_states[1, seq_ind] - 
-                    #                                  proj(r[1, seq_ind], hidden_states[1, seq_ind]) + 
-                    #                                  proj(r[1, seq_ind], neg_t[1, seq_ind]) + alpha * r[1, seq_ind])
-                    # activations = hidden_states
+            #         #     hidden_states[0, seq_ind] = (hidden_states[0, seq_ind] - 
+            #         #                                  proj(r[0, seq_ind], hidden_states[0, seq_ind]) + 
+            #         #                                  proj(r[0, seq_ind], neg_t[0, seq_ind]) + alpha * r[0, seq_ind])
+            #         #     hidden_states[1, seq_ind] = (hidden_states[1, seq_ind] - 
+            #         #                                  proj(r[1, seq_ind], hidden_states[1, seq_ind]) + 
+            #         #                                  proj(r[1, seq_ind], neg_t[1, seq_ind]) + alpha * r[1, seq_ind])
+            #         # activations = hidden_states
 
-                    r = control_vector[0][ind_i].to(hidden_states.device, hidden_states.dtype).mean(1, keepdim=True)
-                    neg_t = control_vector[1][ind_i].to(hidden_states.device, hidden_states.dtype).mean(1, keepdim=True)
+            #         r = control_vector[0][ind_i].to(hidden_states.device, hidden_states.dtype).mean(1, keepdim=True)
+            #         neg_t = control_vector[1][ind_i].to(hidden_states.device, hidden_states.dtype).mean(1, keepdim=True)
 
-                    hidden_states = (hidden_states - 
-                                                batch_proj(r, hidden_states) + 
-                                                batch_proj(r, neg_t) + alpha * r)
-                    activations = hidden_states
+            #         hidden_states = (hidden_states - 
+            #                                     batch_proj(r, hidden_states) + 
+            #                                     batch_proj(r, neg_t) + alpha * r)
+            #         activations = hidden_states
 
 
         # 3. Output
@@ -506,7 +544,7 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         # Modulation
         hidden_states = hidden_states * (1 + scale) + shift
         hidden_states = self.proj_out(hidden_states)
-        return (hidden_states, activations)
+        return hidden_states
 
     def get_absolute_pos_embed(self, grid):
         grid_np = grid[0].cpu().numpy()

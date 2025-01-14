@@ -82,6 +82,7 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
 
         self.patchify_proj = nn.Linear(in_channels, inner_dim, bias=True)
 
+        
         self.positional_embedding_type = positional_embedding_type
         self.positional_embedding_theta = positional_embedding_theta
         self.positional_embedding_max_pos = positional_embedding_max_pos
@@ -383,9 +384,10 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
                 ) * -10000.0
                 encoder_attention_mask = encoder_attention_mask.unsqueeze(1)
 
+        
+
         # 1. Input
         hidden_states = self.patchify_proj(hidden_states)
-
         if self.timestep_scale_multiplier:
             timestep = self.timestep_scale_multiplier * timestep
 

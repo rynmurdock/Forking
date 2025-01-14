@@ -16,23 +16,29 @@ from transformers import T5EncoderModel, T5Tokenizer
 
 from transformers import BitsAndBytesConfig
 
-quantization_config = BitsAndBytesConfig(load_in_4bit=True)
+quantization_config = BitsAndBytesConfig(load_in_8bit=True)
 
 from ltx_video.models.autoencoders.causal_video_autoencoder import (
     CausalVideoAutoencoder,
 )
 from ltx_video.models.transformers.symmetric_patchifier import SymmetricPatchifier
-# from ltx_video.models.transformers.transformer3d import Transformer3DModel
+
 from ltx_video.models.transformer_patched import Transformer3DModel
 
 from ltx_video.pipelines.pipeline_ltx_video import LTXVideoPipeline
 from ltx_video.schedulers.rf import RectifiedFlowScheduler
 from ltx_video.utils.conditioning_method import ConditioningMethod
 
+import clip
 
 MAX_HEIGHT = 720
 MAX_WIDTH = 1280
 MAX_NUM_FRAMES = 257
+
+
+def get_clip(): # TODO give as input
+    model, preprocess = clip.load("ViT-L/14", device='cuda')
+    return model.requires_grad_(False)# doesn't cast the layernorm smh smh .to(DTYPE)
 
 
 def load_vae(vae_dir):
@@ -48,8 +54,12 @@ def load_vae(vae_dir):
     return vae.to(torch.bfloat16)
 
 
-def load_unet(unet_dir): # TODO don't hardcode -- use arg
-    unet_ckpt_path = unet_dir + '/unet_diffusion_pytorch_model.safetensors'
+# NOTE this is not identical to the train_ip version!
+def load_unet(unet_dir):
+    unet_ckpt_path = './' + "latest.pt"
+
+    # unet_ckpt_path = unet_dir + '/unet_diffusion_pytorch_model.safetensors'
+
     unet_config_path = unet_dir + "config.json"
     transformer_config = Transformer3DModel.load_config(unet_config_path)
     transformer = Transformer3DModel.from_config(transformer_config)
@@ -57,6 +67,14 @@ def load_unet(unet_dir): # TODO don't hardcode -- use arg
         unet_state_dict = torch.load(unet_ckpt_path)
     else:
         unet_state_dict = safetensors.torch.load_file(unet_ckpt_path)
+
+    # handle torch compile saving quirk.
+
+    unwanted_prefix = '_orig_mod.' 
+    for k,v in list(unet_state_dict.items()): 
+        if k.startswith(unwanted_prefix): 
+            unet_state_dict[k[len(unwanted_prefix):]] = unet_state_dict.pop(k) 
+
     transformer.load_state_dict(unet_state_dict, strict=False)
     if torch.cuda.is_available():
         transformer = transformer.cuda()
@@ -70,7 +88,7 @@ def load_scheduler(scheduler_dir):
 
 
 def load_image_to_tensor_with_resize_and_crop(
-    image_path, target_height=512, target_width=768
+    image_path, target_height=512, target_width=512
 ):
     image = Image.open(image_path).convert("RGB")
     input_width, input_height = image.size
@@ -151,16 +169,15 @@ def get_unique_filename(
     dir: Path,
     endswith=None,
     index_range=1000,
-):
-    # base_filename = f"{base}_{convert_prompt_to_filename(prompt, max_len=30)}_{seed}_{resolution[0]}x{resolution[1]}x{resolution[2]}"
-    # for i in range(index_range):
-    #     filename = dir + f"{str(base_filename)}_{str(i)}{endswith if endswith else ''}{str(ext)}"
-    #     if not os.path.exists(filename):
-    #         return filename
-    # raise FileExistsError(
-    #     f"Could not find a unique filename after {index_range} attempts."
-    # )
-    return 'i.mp4'
+) -> Path:
+    base_filename = f"{base}_{convert_prompt_to_filename(prompt, max_len=30)}_{seed}_{resolution[0]}x{resolution[1]}x{resolution[2]}"
+    for i in range(index_range):
+        filename = dir + f"{base_filename}_{i}{endswith if endswith else ''}{ext}"
+        if not os.path.exists(filename):
+            return filename
+    raise FileExistsError(
+        f"Could not find a unique filename after {index_range} attempts."
+    )
 
 
 def seed_everething(seed: int):
@@ -197,11 +214,11 @@ def main():
         default=None,
         help="Path to the folder to save output video, if None will save in outputs/ directory.",
     )
-    parser.add_argument("--seed", type=int, default="171198")
+    parser.add_argument("--seed", type=int, default="7")
 
     # Pipeline parameters
     parser.add_argument(
-        "--num_inference_steps", type=int, default=20, help="Number of inference steps"
+        "--num_inference_steps", type=int, default=40, help="Number of inference steps"
     )
     parser.add_argument(
         "--num_images_per_prompt",
@@ -218,23 +235,23 @@ def main():
     parser.add_argument(
         "--height",
         type=int,
-        default=480,
+        default=512,
         help="Height of the output video frames. Optional if an input image provided.",
     )
     parser.add_argument(
         "--width",
         type=int,
-        default=704,
+        default=512,
         help="Width of the output video frames. If None will infer from input image.",
     )
     parser.add_argument(
         "--num_frames",
         type=int,
-        default=121,
+        default=65,
         help="Number of frames to generate in the output video",
     )
     parser.add_argument(
-        "--frame_rate", type=int, default=25, help="Frame rate for the output video"
+        "--frame_rate", type=int, default=24, help="Frame rate for the output video"
     )
 
     parser.add_argument(
@@ -246,14 +263,14 @@ def main():
     # Prompts
     parser.add_argument(
         "--prompt",
+        default='''''',
         type=str,
-        default='''A woman with blonde hair styled up, wearing a black dress with sequins and pearl earrings, looks down with a sad expression on her face. The camera remains stationary, focused on the woman's face. The lighting is dim, casting soft shadows on her face. The scene appears to be from a movie or TV show.''',
         help="Text prompt to guide generation",
     )
     parser.add_argument(
         "--negative_prompt",
         type=str,
-        default="low quality. still image.",
+        default="",
         help="Negative prompt for undesired features",
     )
 
@@ -266,7 +283,7 @@ def main():
     seed_everething(args.seed)
 
     output_dir = (
-        Path(args.output_path)
+        str(args.output_path)
         if args.output_path
         else Path(f"outputs/{datetime.today().strftime('%Y-%m-%d')}")
     )
@@ -279,6 +296,12 @@ def main():
         )
     else:
         media_items_prepad = None
+
+    clip_embed = None
+    if media_items_prepad is not None:
+        clip_model = get_clip()
+        clip_media = (media_items_prepad + 1) / 2
+        clip_embed = clip_model.encode_image((torch.nn.functional.interpolate(clip_media.squeeze().to('cuda')[None], (224, 224)) - .45) / .26).to(torch.bfloat16)
 
     height = args.height if args.height else media_items_prepad.shape[-2]
     width = args.width if args.width else media_items_prepad.shape[-1]
@@ -308,7 +331,7 @@ def main():
         media_items = None
 
     # Paths for the separate mode directories
-    ckpt_dir = args.ckpt_dir
+    ckpt_dir = str(args.ckpt_dir)
     unet_dir = ckpt_dir + "unet/"
     vae_dir = ckpt_dir + "vae/"
     scheduler_dir = ckpt_dir + "scheduler/"
@@ -352,12 +375,17 @@ def main():
         "prompt_attention_mask": None,
         "negative_prompt": args.negative_prompt,
         "negative_prompt_attention_mask": None,
-        "media_items": media_items,
+        "clip_embed": clip_embed if clip_embed is not None else None,
+        'ip_scale': 1 if clip_embed != None else None,
+        # "media_items": media_items,
     }
+
+    print(args)
 
     generator = torch.Generator(
         device="cuda" if torch.cuda.is_available() else "cpu"
     ).manual_seed(args.seed)
+    print(height_padded, num_frames_padded, )
     images = pipeline(
         num_inference_steps=args.num_inference_steps,
         num_images_per_prompt=args.num_images_per_prompt,
@@ -371,14 +399,17 @@ def main():
         frame_rate=args.frame_rate,
         **sample,
         is_video=True,
+        is_train=False,
         vae_per_channel_normalize=True,
         conditioning_method=(
-            ConditioningMethod.FIRST_FRAME
-            if media_items is not None
-            else ConditioningMethod.UNCONDITIONAL
+            ConditioningMethod.UNCONDITIONAL # HACK we have hardcoded differences from regular inference because we never use 
+            #                                      trad conditioning
         ),
         mixed_precision=not args.bfloat16,
-    )[0]
+    )[0]#.unsqueeze(2)
+    print(images.shape)
+    if len(images.shape) == 4:
+        images = images.unsqueeze(2)
 
     # Crop the padded images to the desired resolution and number of frames
     (pad_left, pad_right, pad_top, pad_bottom) = padding
@@ -405,7 +436,7 @@ def main():
                 prompt=args.prompt,
                 seed=args.seed,
                 resolution=(height, width, num_frames),
-                dir=output_dir,
+                dir=str(output_dir),
             )
             imageio.imwrite(output_filename, video_np[0])
         else:
@@ -413,42 +444,35 @@ def main():
                 base_filename = f"img_to_vid_{i}"
             else:
                 base_filename = f"text_to_vid_{i}"
-            output_filename = get_unique_filename(
-                base_filename,
-                ".mp4",
-                prompt=args.prompt,
-                seed=args.seed,
-                resolution=(height, width, num_frames),
-                dir=output_dir,
-            )
+            output_filename = str(output_dir)+'/i.mp4'
 
             # Write video
             with imageio.get_writer(output_filename, fps=fps) as video:
                 for frame in video_np:
                     video.append_data(frame)
 
-            # Write condition image
-            if args.input_image_path:
-                reference_image = (
-                    (
-                        media_items_prepad[0, :, 0].permute(1, 2, 0).cpu().data.numpy()
-                        + 1.0
-                    )
-                    / 2.0
-                    * 255
-                )
-                imageio.imwrite(
-                    get_unique_filename(
-                        base_filename,
-                        ".png",
-                        prompt=args.prompt,
-                        seed=args.seed,
-                        resolution=(height, width, num_frames),
-                        dir=output_dir,
-                        endswith="_condition",
-                    ),
-                    reference_image.astype(np.uint8),
-                )
+            # # Write condition image
+            # if args.input_image_path:
+            #     reference_image = (
+            #         (
+            #             media_items_prepad[0, :, 0].permute(1, 2, 0).cpu().data.numpy()
+            #             + 1.0
+            #         )
+            #         / 2.0
+            #         * 255
+            #     )
+            #     imageio.imwrite(
+            #         get_unique_filename(
+            #             base_filename,
+            #             ".png",
+            #             prompt=args.prompt,
+            #             seed=args.seed,
+            #             resolution=(height, width, num_frames),
+            #             dir=output_dir,
+            #             endswith="_condition",
+            #         ),
+            #         reference_image.astype(np.uint8),
+                # )
         logger.warning(f"Output saved to {output_dir}")
 
 

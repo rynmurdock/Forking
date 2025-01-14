@@ -171,12 +171,17 @@ class RectifiedFlowScheduler(SchedulerMixin, ConfigMixin, TimestepShifter):
                 samples, timesteps, self.base_resolution
             )
         return timesteps
+    
+    def one_shift_timestep(self, samples, timesteps):
+        timesteps = simple_diffusion_resolution_dependent_timestep_shift(samples, timesteps)
+        return timesteps
 
     def set_timesteps(
         self,
         num_inference_steps: int,
         samples: Tensor,
         device: Union[str, torch.device] = None,
+        quadratic_half=True,
     ):
         """
         Sets the discrete timesteps used for the diffusion chain. Supporting function to be run before inference.
@@ -190,7 +195,20 @@ class RectifiedFlowScheduler(SchedulerMixin, ConfigMixin, TimestepShifter):
         timesteps = torch.linspace(1, 1 / num_inference_steps, num_inference_steps).to(
             device
         )
+
+        # if quadratic_half:
+        #     # ~from MovieGen linear-quadratic t-schedule
+        #     # take first half of inference steps & simulate longer-num_steps; take second half & use quadratic steps
+        #     timesteps = torch.linspace(1, 1 / 250, 250).to(
+        #         device
+        #     )[-num_inference_steps:]
+        #     next_half_timesteps = (torch.linspace(1, 0, (num_inference_steps//2))**2).to(
+        #         device
+        #     ) * (1-timesteps[0]) + timesteps[0]
+        #     timesteps[:timesteps.shape[0]//2] = next_half_timesteps[:timesteps.shape[0]//2]
+
         self.timesteps = self.shift_timesteps(samples, timesteps)
+
         self.delta_timesteps = self.timesteps - torch.cat(
             [self.timesteps[1:], torch.zeros_like(self.timesteps[-1:])]
         )
