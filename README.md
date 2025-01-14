@@ -1,3 +1,10 @@
+# A fork of LTX-Video to train a Generative-Recsys-compatible IP Adapter
+
+Vector arythmetic and other usecases require a smooth latent space to explore. Although LTX Video can already condition on images, I've trained an IP Adapter to explore the space of possible images.
+
+This repo is incredibly unstable. Reach out if you want to use it. 
+
+
 <div align="center">
 
 # LTX-Video
